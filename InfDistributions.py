@@ -1,7 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib import style
-import seaborn as sns
 from scipy import integrate
 import pandas as pd
 from tqdm import tqdm
@@ -39,4 +36,4 @@ infections = np.zeros((N_samples,end_day-start_day+1))
 for i in tqdm(range(start_day,end_day+1)):
     infections[:,i-start_day] = np.array([integrate.quad(rand_beta,i,i+1)[0] for _ in tqdm(range(N_samples))])
     
-pd.DataFrame(infections).to_csv("Incident_Infections_10000.csv")
+pd.DataFrame(infections).to_csv("Incident_Infections_10000.csv", index=False)
