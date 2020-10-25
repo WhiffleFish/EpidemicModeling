@@ -1,5 +1,3 @@
 # Epidemic Modeling
-- SI
-- SIR
-- SEIR
-- SIS
+
+General work associated with COVID research
