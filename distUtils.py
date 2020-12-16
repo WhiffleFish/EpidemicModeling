@@ -86,6 +86,26 @@ def plot_beta(params, ax=None, figsize=(12,7),**kwargs):
         ax.plot(xs,ys,**kwargs)
         return fig, ax
 
+def get_beta(t, params, alpha):
+
+    t0,tpeak,tf,Vpeak = params
+    Vpeak = min(alpha*max(Vpeak-6,0)+6,Vpeak)
+    
+    if t <= t0:
+        return 0
+    elif t0 < t < tpeak:
+        return interp(t0,3,tpeak,Vpeak,t)
+    else: # tpeak < t 
+        return  max(interp(tpeak,Vpeak,tf,3,t),0)
+
+def get_trajectory_data(N=1000, alpha=1, start_day=0, end_day=20):
+    traj_arr = []
+    beta_arr = []
+    for _ in tqdm(range(N)):
+        params = gen_params()
+        traj_arr.append([get_beta(i,params,alpha) for i in range(start_day,end_day+1)])
+
+    return traj_arr
 
 def gen_inf_data(N=1_000, alpha=1, start_day=0, end_day=20, beta_pts=False):
     inf_arr = []
