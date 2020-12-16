@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from tqdm import tqdm
+from tqdm import tqdm, trange
 
 def gen_params():
     t0 = np.random.rand() + 2.5
@@ -108,9 +108,12 @@ def get_trajectory_data(N=1000, alpha=1, start_day=0, end_day=20):
     return traj_arr
 
 def gen_inf_data(N=1_000, alpha=1, start_day=0, end_day=20, beta_pts=False):
+    '''
+    Entry 1: Number of people infected from start_day to start_day + 1
+    '''
     inf_arr = []
     beta_arr = []
-    for _ in tqdm(range(N)):
+    for _ in trange(N):
         params = gen_params()
         if beta_pts:
             beta_arr.append(params)

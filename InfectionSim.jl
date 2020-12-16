@@ -1,13 +1,13 @@
 using Random, Distributions, Plots
-# using StatsPlots
 import CSV.File
 import DataFrames.DataFrame
 
 Bdist = LogNormal(1.644,0.363);
 
 df = File("Sample50.csv") |> DataFrame;
+viral_loads = File("raw_viral_load.csv") |> DataFrame;
 
-k = 50
+k = 50 # Sample size for dataframe 
 
 #=
 Assume that individual infection rates are distributed as Gamma RV's, s.t. sample size 50 data 
@@ -53,9 +53,9 @@ end
  end
 
  mutable struct SimHist
-    susHist
-    infHist
-    recHist
+    sus
+    inf
+    rec
     N
     T
  end
@@ -104,43 +104,20 @@ function Simulate(T, state::State, params::Params)
     return SimHist(susHist, infHist, recHist, params.N, T)
 end
 
-@userplot StackedArea
-@recipe function f(pc::StackedArea)
-    x, y = pc.args
-    n = length(x)
-    y = cumsum(y, dims=2)
-    seriestype := :shape
+function plotHist(hist::SimHist; prop::Bool=true, kind::Symbol=:line, order::String="SIR")
+    @assert length(order) == 3
+    data_dict = Dict('S'=>hist.sus, 'I' => hist.inf, 'R' => hist.rec)
+    label_dict = Dict('S'=>"Sus", 'I'=>"Inf", 'R'=>"Rec")
 
-    for c=1:size(y,2)
-        sx = vcat(x, reverse(x))
-        sy = vcat(y[:,c], c==1 ? zeros(n) : reverse(y[:,c-1]))
-        @series (sx, sy)
-    end
-end
+    data = [data_dict[letter] for letter in order]
+    data = prop ? hcat(data...)*100/hist.N : hcat(data...)
+    ylabel = prop ? "Population Percentage" : "Population"
 
-function plotHist(hist, prop=true, kind="line")
-    if prop
-        if kind == "line"
-            plot(hist.infHist/hist.N*100,label="Inf")
-            plot!(hist.susHist/hist.N*100,label="sus")
-            plot!(hist.recHist/hist.N*100, label="rec")
-            
-        elseif kind=="stack"
-            labels = reshape(["rec","inf","sus"],(1,3))
-            stackedarea(1:hist.T, [hist.recHist hist.infHist hist.susHist]*100/hist.N, labels=labels)
-        end
-        xlabel!("Time (Days)")
-        ylabel!("Population Percentage")
+    labels = reshape([label_dict[letter] for letter in order],1,3)
+
+    if kind == :line
+        plot(data, labels=labels, ylabel=ylabel, xlabel="Time (Days)")
     else
-        if kind == "line"
-            plot(hist.infHist,label="Inf")
-            plot!(hist.susHist,label="sus")
-            plot!(hist.recHist, label="rec")
-        elseif kind=="stack"
-            labels = reshape(["rec","inf","sus"],(1,3))
-            stackedarea(1:hist.T, [hist.recHist hist.infHist hist.susHist], labels=labels)
-        end
-        xlabel!("Time (Days)")
-        ylabel!("Population")
+        areaplot(data, labels=labels, ylabel=ylabel, xlabel="Time (Days)")
     end
-end
+end;
