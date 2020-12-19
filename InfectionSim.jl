@@ -3,19 +3,19 @@ import CSV.File
 import DataFrames.DataFrame
 
 
-function FitInfectionDistributions(df, horizon=14)
+function FitInfectionDistributions(df, horizon=14, sample_size=50)
     distributions = []
     for day in 1:horizon
         try # Initially try to fit Gamma
             shape, scale = params(fit(Gamma, df[!,day]))
-            push!(distributions, Gamma(shape/k, scale*k))
+            push!(distributions, Gamma(shape/sample_size, scale*sample_size))
         catch e
 
-            if isa(e,ArgumentError)
+            if isa(e, ArgumentError)
                 try # If this doesn't work, try Exponential
                     weights = min.(log.(1 ./ df[!,day]),10)
                     β = params(fit(Exponential, df[!,day], weights))[1]
-                    push!(distributions, Gamma(1/k, β*k))
+                    push!(distributions, Gamma(1/sample_size, β*sample_size))
                 catch e # If exponential doesn't work either, use dirac 0 dist
                     if isa(e,ArgumentError)
                         push!(distributions, Normal(0,0))
@@ -28,9 +28,11 @@ function FitInfectionDistributions(df, horizon=14)
     return distributions
 end
 
+
 function prop_above_LOD(df, day, LOD)
     sum(df[!,day] .> LOD)/size(df)[1]
 end
+
 
 function RVsum(dist::Normal, N)
     μ, σ = params(dist)
@@ -73,6 +75,7 @@ end
     rec # Recovered Population History
     N # Total Population
     T # Simulation Time
+    incident
  end
  
 
@@ -104,7 +107,7 @@ end
 
 
 function PositiveTests(state::State, params::Params, action::Action)
-    
+    @assert 0 <= action.testing_prop <= 1
     pos_tests = zeros(Int32,length(params.pos_test_probs))
 
     for (i,inf) in enumerate(state.I)
@@ -142,6 +145,7 @@ function Simulate(T::Int, state::State, params::Params, action::Action)
     susHist = zeros(Int32,T)
     infHist = zeros(Int32,T)
     recHist = zeros(Int32,T)
+    incidentHist = zeros(Int32,T)
 
     for day in 1:T
         susHist[day] = state.S 
@@ -155,10 +159,11 @@ function Simulate(T::Int, state::State, params::Params, action::Action)
         state.R += state.I[end]
         state.I = circshift(state.I,1)
         new_infections = IncidentInfections(state, params)
+        incidentHist[day] = new_infections
         state.I[1] = new_infections
         state.S -= new_infections
     end
-    return SimHist(susHist, infHist, recHist, state.N, T)
+    return SimHist(susHist, infHist, recHist, state.N, T, incidentHist)
 end
 
 
@@ -183,11 +188,11 @@ function plotHist(hist::SimHist; prop::Bool=true, kind::Symbol=:line, order::Str
 end;
 
 
-function initParams(;symptomatic_isolation_prob=1, asymptomatic_prob=0, LOD=6, test_delay=0, infections_path="Sample50.csv", sample_size=50 ,viral_loads_path="raw_viral_load.csv", horizon=14)
+function initParams(;symptomatic_isolation_prob=1, asymptomatic_prob=0, LOD=6, test_delay=0, infections_path="../data/Sample50.csv", sample_size=50 ,viral_loads_path="../data/raw_viral_load.csv", horizon=14)
     df = File(infections_path) |> DataFrame;
     viral_loads = File(viral_loads_path) |> DataFrame;
 
-    infDistributions = FitInfectionDistributions(df, horizon)
+    infDistributions = FitInfectionDistributions(df, horizon, sample_size)
     pos_test_probs = [prop_above_LOD(viral_loads,day,LOD) for day in 1:horizon]
     symptom_dist = LogNormal(1.644,0.363);
 
@@ -225,8 +230,8 @@ end
 
 Bdist = LogNormal(1.644,0.363);
 
-df = File("Sample50.csv") |> DataFrame;
-viral_loads = File("raw_viral_load.csv") |> DataFrame;
+df = File("../data/Sample50.csv") |> DataFrame;
+viral_loads = File("../data/raw_viral_load.csv") |> DataFrame;
 LOD = 6 # 10^6
 
 k = 50 # Sample size for dataframe 
