@@ -4,10 +4,10 @@ import seaborn as sns
 from tqdm import tqdm, trange
 
 def gen_params():
-    t0 = np.random.rand() + 2.5
+    t0 = np.random.uniform(2.5,3.5)
     tpeak = t0 + 0.2 + np.random.gamma(1.8)
-    tf = tpeak + np.random.rand()*5 + 5
-    Vpeak = np.random.rand()*4 + 7
+    tf = tpeak + np.random.uniform(5,10)
+    Vpeak = np.random.uniform(7,11)
     return t0,tpeak,tf,Vpeak
 
 
@@ -19,10 +19,10 @@ def integrate_full_inf(alpha=1):
     """
     Integrate over full stochastic infectiousness curve
     """
-    t0 = np.random.rand() + 2.5
-    Vpeak = np.random.rand()*4 + 7
+    t0 = np.random.uniform(2.5,3.5)
+    Vpeak = np.random.uniform(7,11)
     tpeak = t0 + 0.2 + np.random.gamma(1.8)
-    tf = tpeak + np.random.rand()*5 + 5
+    tf = tpeak + np.random.uniform(5,10)
     
     t0n = t0 + 3*(tpeak-t0)/(Vpeak-3)
     Vpeakn = alpha*max(Vpeak-6,0)
@@ -39,10 +39,10 @@ def integrate_inf(t1,t2,alpha, param_list=None):
     Integrate over infectiousness curve from time t1 to t2 scaled by alpha
     """
     if not param_list:
-        t0 = np.random.rand() + 2.5
+        t0 = np.random.uniform(2.5,3.5)
         tpeak = t0 + 0.2 + np.random.gamma(1.8)
-        tf = tpeak + np.random.rand()*5 + 5
-        Vpeak = np.random.rand()*4 + 7
+        tf = tpeak + np.random.uniform(5,10)
+        Vpeak = np.random.uniform(7,11)
     else:
         t0,tpeak,tf,Vpeak = param_list
 
