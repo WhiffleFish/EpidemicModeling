@@ -3,7 +3,15 @@ import CSV.File
 import DataFrames.DataFrame
 
 
-function FitInfectionDistributions(df, horizon=14, sample_size=50)
+"""
+Fit Distributions to MC sim data for secondary infections per index case as a function of infection age
+
+# Arguments
+- `df::DataFrame` - DataFrame for csv containing MC simulations for daily individual infections.
+- `horizon::Int=14` - Number of days in infection age before individual is considered naturally recovered and completely uninfectious.
+- `sample_size::Int=50` - Sample size for `infections_path` csv where row entry is average infections for given sample size.
+"""
+function FitInfectionDistributions(df::DataFrame, horizon::Int=14, sample_size::Int=50)
     distributions = []
     for day in 1:horizon
         try # Initially try to fit Gamma
@@ -29,18 +37,40 @@ function FitInfectionDistributions(df, horizon=14, sample_size=50)
 end
 
 
-function prop_above_LOD(df, day, LOD)
+"""
+Proportion of infectious population above some limit of detection from MC simulations
+
+# Arguments
+- `df::DataFrame` - DataFrame for csv containing MC simulations for daily individual infections.
+- `day::Int` - Infection age (day)
+- `LOD::Real` - Limit of detection (Log scale: ``10^x \\rightarrow x``)
+"""
+function prop_above_LOD(df::DataFrame, day::Int, LOD::Real)
     sum(df[!,day] .> LOD)/size(df)[1]
 end
 
 
-function RVsum(dist::Normal, N)
+"""
+Return distribution resulting from sum of i.i.d RV's characterized by Normal distribution
+
+# Arguments
+- `dist::Normal` - Distribution characterizing random variable
+- `N::Int` - Number of i.i.d RV's summed
+"""
+function RVsum(dist::Normal, N::Int)
     μ, σ = params(dist)
     return Normal(μ*N,σ*N)
 end
 
 
-function RVsum(dist::Gamma, N)
+"""
+Return distribution resulting from sum of i.i.d RV's characterized by Gamma distribution
+
+# Arguments
+- `dist::Gamma` - Distribution characterizing random variable
+- `N::Int` - Number of i.i.d RV's summed
+"""
+function RVsum(dist::Gamma, N::Int)
     k, θ = params(dist)
     if k*N > 0
         return Gamma(k*N, θ)
@@ -50,40 +80,81 @@ function RVsum(dist::Gamma, N)
 end
 
 
+"""
+# Arguments
+- `symptom_dist::Distribution` - Distribution over infection age giving probability of developing symptoms
+- `Infdistributions::Array{UnivariateDistribution,1}` - Fitted Distributions for secondary infections per index case as a function of infection age
+- `symptomatic_isolation_prob::Real= 1` - Probability of isolating after developing symptoms
+- `asymptomatic_prob::Real = 0` - Probability that an infected individual displays no symptoms
+- `pos_test_probs::Array{Float32,1} = zeros(length(Infdistributions))` - Probability of testing positive by exceeding test LOD as a function of infection age ``\\tau``(Default to no testing)
+- `test_delay::Int = 0` - Delay between test being administered and received by subject (days)
+"""
 @with_kw mutable struct Params
-    symptom_dist
-    Infdistributions
-    symptomatic_isolation_prob = 1
-    asymptomatic_prob = 0
-    pos_test_probs = zeros(length(Infdistributions)) # Default to no testing
+    symptom_dist::Distribution
+    Infdistributions::Array{UnivariateDistribution,1}
+    symptomatic_isolation_prob::Real= 1
+    asymptomatic_prob::Real = 0
+    pos_test_probs::Array{Float32,1} = zeros(length(Infdistributions)) # Default to no testing
     test_delay::Int = 0
 end
 
 
- mutable struct State
+"""
+# Arguments
+- `S::Int` - Current Susceptible Population
+- `I::Array{Int,1}` - Current Infected Population 
+- `R::Int` - Current Recovered Population
+- `N::Int` - Total Population
+- `Tests::Array{Int,2}` - Array for which people belonging to array element ``T_{i,j}`` are ``i-1`` days away 
+    from receiving positive test and have infection age ``j``
+"""
+mutable struct State
     S::Int # Current Susceptible Population
     I::Array{Int,1} # Current Infected Population 
     R::Int # Current Recovered Population
     N::Int # Total Population
     Tests::Array{Int,2}
- end
-
-
- mutable struct SimHist
-    sus # Susceptible Population History
-    inf # Infected Population History
-    rec # Recovered Population History
-    N # Total Population
-    T # Simulation Time
-    incident
- end
- 
-
-mutable struct Action
-    testing_prop
 end
 
 
+"""
+Simulation History
+
+# Arguments
+- `sus::Array{Int, 1}` - Susceptible Population History
+- `inf::Array{Int, 1}` - Infected Population History
+- `rec::Array{Int, 1}` - Recovered Population History
+- `N::Int` - Total Population
+- `T::Int` - Simulation Time
+- `incident::Array{Int, 1}` = nothing - Incident Infections need not always be recorded
+"""
+@with_kw mutable struct SimHist
+    sus::Array{Int, 1} # Susceptible Population History
+    inf::Array{Int, 1} # Infected Population History
+    rec::Array{Int, 1} # Recovered Population History
+    N::Int # Total Population
+    T::Int # Simulation Time
+    incident::Array{Int, 1} = nothing # Incident Infections need not always be recorded
+end
+ 
+
+"""
+Action input to influence epidemic simulation dynamics
+
+# Arguments
+- `testing_prop::Real` - Proportion of population to be tested on one day
+    - Simplification of typical "x-days between tests per person"  action strategy due to non agent-based model
+"""
+mutable struct Action
+    testing_prop::Real
+end
+
+
+"""
+# Arguments
+- `state::State` - Current Sim State
+- `params::Params` - Simulation parameters
+"""
 function IncidentInfections(state::State, params::Params)
     infSum = 0
     for (i, inf) in enumerate(state.I)
@@ -95,7 +166,12 @@ function IncidentInfections(state::State, params::Params)
 end
 
 
-function SymptomaticIsolation(I, params::Params)
+"""
+# Arguments
+- `I::Array{Int,1}` - Current infectious population vector (divided by infection age)
+- `params::Params` - Simulation parameters
+"""
+function SymptomaticIsolation(I::Array{Int,1}, params::Params)
     isolating = zero(I)
     for (i, inf) in enumerate(I)
         symptomatic_prob = cdf(params.symptom_dist,i) - cdf(params.symptom_dist,i-1)
@@ -106,6 +182,12 @@ function SymptomaticIsolation(I, params::Params)
 end
 
 
+"""
+# Arguments
+- `state::State` - Current Sim State
+- `params::Params` - Simulation parameters
+- `action::Action` - Current Sim Action
+"""
 function PositiveTests(state::State, params::Params, action::Action)
     @assert 0 <= action.testing_prop <= 1
     pos_tests = zeros(Int32,length(params.pos_test_probs))
@@ -118,8 +200,18 @@ function PositiveTests(state::State, params::Params, action::Action)
 end
 
 
+"""
+Given current state and simulation parameters, return state for which Infectious population is decreased by surveillance testing and symptomatic isolation.  
+Isolation due to receiving a positive test and isolation due to developing symptoms are not disjoint, therefore both must be calculated together.
+Some waiting for a test to return may develop symptoms and isolate, therefore we cannot simply count these two events as two deductions from the
+infectious population.
+
+# Arguments
+- `state::State` - Current Sim State
+- `params::Params` - Simulation parameters
+- `action::Action` - Current Sim Action
+"""
 function UpdateIsolations(state::State, params::Params, action::Action)
-    
 
     sympt = SymptomaticIsolation(state.I, params) # Number of people isolating due to symptoms
     pos_tests = PositiveTests(state, params, action)
@@ -141,6 +233,13 @@ function UpdateIsolations(state::State, params::Params, action::Action)
 end
 
 
+"""
+# Arguments
+- `T::Int` - Simulation duration (days)
+- `state::State` - Current Sim State
+- `params::Params` - Simulation parameters
+- `action::Action` - Current Sim Action
+"""
 function Simulate(T::Int, state::State, params::Params, action::Action)
     susHist = zeros(Int32,T)
     infHist = zeros(Int32,T)
@@ -167,6 +266,13 @@ function Simulate(T::Int, state::State, params::Params, action::Action)
 end
 
 
+"""
+# Arguments
+- `hist::SimHist` - Simulation Data History
+- `prop::Bool=true` - Graph as subpopulations as percentage (proportion) of total population
+- `kind::Symbol=:line` - `:line` to graph all trajectories on top of each other; ``:stack` for stacked line plot
+- `order::String="SIR"` - Pertains to stacking order for stacked line plot and legend order (arg must be some permutation of chars S,I,R)
+"""
 function plotHist(hist::SimHist; prop::Bool=true, kind::Symbol=:line, order::String="SIR")
     @assert length(order) == 3
     data_dict = Dict('S'=>hist.sus, 'I' => hist.inf, 'R' => hist.rec)
@@ -185,10 +291,26 @@ function plotHist(hist::SimHist; prop::Bool=true, kind::Symbol=:line, order::Str
     else
         areaplot(data, labels=labels, ylabel=ylabel, xlabel="Time (Days)", color=colors)
     end
-end;
+end
 
 
-function initParams(;symptomatic_isolation_prob=1, asymptomatic_prob=0, LOD=6, test_delay=0, infections_path="../data/Sample50.csv", sample_size=50 ,viral_loads_path="../data/raw_viral_load.csv", horizon=14)
+"""
+...
+# Arguments
+- `symptomatic_isolation_prob::Real=1`: Probability that individual isolates upon becoming symptomatic `` \\in [0,1] ``.
+- `asymptomatic_prob::Real=0`: Probability that individual becomes symptomatic by infection age ``\\tau``, `` \\in [0,1] ``.
+- `LOD::Real=6`: Surveillance Test Limit of Detection (Log Scale).
+- `test_delay::Int=0`: Time between test is administered and result is returned.
+- `infections_path::String="../data/Sample50.csv"`: Path to csv containing MC simulations for daily individual infections.
+- `sample_size::Int=50`: Sample size for `infections_path` csv where row entry is average infections for given sample size.
+- `viral_loads_path::String="../data/raw_viral_load.csv"`: Path to csv containing viral load trajectories (cp/ml) tabulated on a daily basis for each individual.
+- `horizon::Int=14`: Number of days in infection age before individual is considered naturally recovered and completely uninfectious.
+...
+"""
+function initParams(;symptomatic_isolation_prob::Real=1, asymptomatic_prob::Real=0, LOD::Real=6, 
+    test_delay::Int=0, infections_path::String="../data/Sample50.csv", sample_size::Int=50,
+    viral_loads_path::String="../data/raw_viral_load.csv", horizon::Int=14)
+    
     df = File(infections_path) |> DataFrame;
     viral_loads = File(viral_loads_path) |> DataFrame;
 
@@ -202,19 +324,27 @@ function initParams(;symptomatic_isolation_prob=1, asymptomatic_prob=0, LOD=6, t
         )
 end
 
-
+"""
+# Arguments
+- `I`: Initial infections
+    - `I::Distribution` - Sample all elements in Infections array from given distribution
+    - `I::Array{Int,1}`` - Take given array as initial infections array
+    - `I::Int` - Take first element of infections array (infection age 0) as given integer
+- `params::Params` - Simulation parameters
+- `N::Int` (opt) - Total Population Size
+"""
 function initState(I, params::Params; N=1_000_000)
     horizon = length(params.Infdistributions)
     if isa(I, Distribution)
         I0 = round.(Int32,rand(truncated(I,0,Inf),horizon))
-    elseif isa(I, Array)
+    elseif isa(I, Array{Int, 1})
         @assert all(I .>= 0 )
         I0 = I
     elseif isa(I, Int)
         I0 = zeros(Int32,horizon)
         I0[1] = I
     else
-        throw(DomainError(I, "I must be distribution, array of integers, or single integer"))
+        throw(DomainError(I, "`I` must be distribution, array of integers, or single integer"))
     end
     
     S0 = N - sum(I0)
@@ -224,37 +354,3 @@ function initState(I, params::Params; N=1_000_000)
     return State(S0, I0, R0, N, tests)
 
 end
-
-
-# --------------------------------------------------------------------
-
-Bdist = LogNormal(1.644,0.363);
-
-df = File("../data/Sample50.csv") |> DataFrame;
-viral_loads = File("../data/raw_viral_load.csv") |> DataFrame;
-LOD = 6 # 10^6
-
-k = 50 # Sample size for dataframe 
-
-#=
-Assume that individual infection rates are distributed as Gamma RV's, s.t. sample size 50 data 
-is mean of Gamma RV's
----
-Entry 1 - Infections from initial infection to 1 day after infection
-=#
-distributions = []
-for day in 1:14
-    if day <= 2
-        push!(distributions, Normal(0,0))
-    elseif day == 3
-        weights = min.(log.(1 ./ df[!,day]),10)
-        β = params(fit(Exponential, df[!,day], weights))[1]
-        push!(distributions, Gamma(1/k, β*k))
-    else
-        shape, scale = params(fit(Gamma, df[!,day]))
-        push!(distributions, Gamma(shape/k, scale*k))
-    end
-end
-
-pos_test_probs = [prop_above_LOD(viral_loads,day,LOD) for day in 1:14];
-println()
