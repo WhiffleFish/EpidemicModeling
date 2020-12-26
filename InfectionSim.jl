@@ -86,7 +86,7 @@ end
 - `Infdistributions::Array{UnivariateDistribution,1}` - Fitted Distributions for secondary infections per index case as a function of infection age
 - `symptomatic_isolation_prob::Real= 1` - Probability of isolating after developing symptoms
 - `asymptomatic_prob::Real = 0` - Probability that an infected individual displays no symptoms
-- `pos_test_probs::Array{Float32,1} = zeros(length(Infdistributions))` - Probability of testing positive by exceeding test LOD as a function of infection age ``\\tau``(Default to no testing)
+- `pos_test_probs::Array{Float64,1} = zeros(length(Infdistributions))` - Probability of testing positive by exceeding test LOD as a function of infection age ``\\tau``(Default to no testing)
 - `test_delay::Int = 0` - Delay between test being administered and received by subject (days)
 """
 @with_kw mutable struct Params
@@ -94,7 +94,7 @@ end
     Infdistributions::Array{UnivariateDistribution,1}
     symptomatic_isolation_prob::Real= 1
     asymptomatic_prob::Real = 0
-    pos_test_probs::Array{Float32,1} = zeros(length(Infdistributions)) # Default to no testing
+    pos_test_probs::Array{Float64,1} = zeros(length(Infdistributions)) # Default to no testing
     test_delay::Int = 0
 end
 
@@ -113,7 +113,7 @@ mutable struct State
     I::Array{Int,1} # Current Infected Population 
     R::Int # Current Recovered Population
     N::Int # Total Population
-    Tests::Array{Int,2}
+    Tests::Array{Int,2} # Rows: Days from receiving test result; Columns: Infection Age
 end
 
 
@@ -190,10 +190,12 @@ end
 """
 function PositiveTests(state::State, params::Params, action::Action)
     @assert 0 <= action.testing_prop <= 1
+    # TODO: Don't test the same people twice!
     pos_tests = zeros(Int32,length(params.pos_test_probs))
 
     for (i,inf) in enumerate(state.I)
-        num_tested = floor(Int,inf*action.testing_prop)
+        num_already_tested = sum(state.Tests[:,i])
+        num_tested = floor(Int,(inf-num_already_tested)*action.testing_prop)
         pos_tests[i] = rand(Binomial(num_tested,params.pos_test_probs[i]))
     end
     return pos_tests
@@ -215,21 +217,55 @@ function UpdateIsolations(state::State, params::Params, action::Action)
 
     sympt = SymptomaticIsolation(state.I, params) # Number of people isolating due to symptoms
     pos_tests = PositiveTests(state, params, action)
+
     sympt_prop = sympt ./ state.I # Symptomatic Isolation Proportion
     replace!(sympt_prop, NaN=>0)
 
     state.R += sum(sympt)
     state.I -= sympt
-    
+
     state.Tests[end,:] = pos_tests
 
-    state.Tests = vcat([transpose(state.Tests[i,:].*(1 .- sympt_prop)) for i in 1:size(state.Tests)[1]]...) |> x -> round.(Int32,x)
+    state.Tests = (1 .- sympt_prop)'.*state.Tests |> x -> floor.(Int32,x)
+    
     state.R += sum(state.Tests[1,:])
     state.I -= state.Tests[1,:]
-
-    state.Tests = circshift(state.Tests,(0,-1))
     
+    @assert all(state.I .>= 0)
+
+    # Progress testing state forward
+    # People k days from receiving test back are now k-1 days from receiving test
+    # Tested individuals with infection age t move to infection age t + 1
+    state.Tests = circshift(state.Tests,(-1,1))
+    
+    # Tests and infection ages do not roll back to beginning; clear last row and first column
+    state.Tests[:,1] *= 0
+    state.Tests[end,:] *= 0
+
     return state
+end
+
+
+
+"""
+# Arguments
+- `state::State` - Current Sim State
+- `params::Params` - Simulation parameters
+- `action::Action` - Current Sim Action
+"""
+function SimStep(state::State, params::Params, action::Action)
+    
+    # Update symptomatic and testing-based isolations
+    state = UpdateIsolations(state, params, action)
+
+    # Incident Infections
+    state.R += state.I[end]
+    state.I = circshift(state.I,1)
+    new_infections = IncidentInfections(state, params)
+    state.I[1] = new_infections
+    state.S -= new_infections
+
+    return state, new_infections
 end
 
 
@@ -251,16 +287,10 @@ function Simulate(T::Int, state::State, params::Params, action::Action)
         infHist[day] = sum(state.I)
         recHist[day] = state.R
 
-        # Update symptomatic and testing-based isolations (Move to recovered)
-        state = UpdateIsolations(state, params, action)
-        
-        # Incident Infections
-        state.R += state.I[end]
-        state.I = circshift(state.I,1)
-        new_infections = IncidentInfections(state, params)
+
+        state, new_infections = SimStep(state, params, action)
         incidentHist[day] = new_infections
-        state.I[1] = new_infections
-        state.S -= new_infections
+
     end
     return SimHist(susHist, infHist, recHist, state.N, T, incidentHist)
 end
@@ -336,12 +366,14 @@ end
 function initState(I, params::Params; N=1_000_000)
     horizon = length(params.Infdistributions)
     if isa(I, Distribution)
-        I0 = round.(Int32,rand(truncated(I,0,Inf),horizon))
+        I0 = round.(Int,rand(truncated(I,0,Inf),horizon))
+        @assert sum(I0) <= N # Ensure Sampled infected is not greater than total population
     elseif isa(I, Array{Int, 1})
         @assert all(I .>= 0 )
+        @assert sum(I) <= N 
         I0 = I
     elseif isa(I, Int)
-        I0 = zeros(Int32,horizon)
+        I0 = zeros(Int,horizon)
         I0[1] = I
     else
         throw(DomainError(I, "`I` must be distribution, array of integers, or single integer"))
