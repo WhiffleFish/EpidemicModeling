@@ -92,8 +92,8 @@ end
 @with_kw mutable struct Params
     symptom_dist::Distribution
     Infdistributions::Array{UnivariateDistribution,1}
-    symptomatic_isolation_prob::Real= 1
-    asymptomatic_prob::Real = 0
+    symptomatic_isolation_prob::Float64 = 1.0
+    asymptomatic_prob::Float64 = 0.0
     pos_test_probs::Array{Float64,1} = zeros(length(Infdistributions)) # Default to no testing
     test_delay::Int = 0
 end
@@ -146,9 +146,17 @@ Action input to influence epidemic simulation dynamics
     - Simplification of typical "x-days between tests per person"  action strategy due to non agent-based model
 """
 mutable struct Action
-    testing_prop::Real
+    testing_prop::Float64
 end
 
+
+function Array(simHist::SimHist)
+    hcat(simHist.sus,simHist.inf, simHist.rec) |> transpose |> Array
+end
+
+function Array(state::State)
+    [state.sus, state.inf, state.rec]
+end
 
 """
 # Arguments
@@ -191,7 +199,7 @@ end
 function PositiveTests(state::State, params::Params, action::Action)
     @assert 0 <= action.testing_prop <= 1
     # TODO: Don't test the same people twice!
-    pos_tests = zeros(Int32,length(params.pos_test_probs))
+    pos_tests = zeros(Int,length(params.pos_test_probs))
 
     for (i,inf) in enumerate(state.I)
         num_already_tested = sum(state.Tests[:,i])
@@ -226,7 +234,7 @@ function UpdateIsolations(state::State, params::Params, action::Action)
 
     state.Tests[end,:] = pos_tests
 
-    state.Tests = (1 .- sympt_prop)'.*state.Tests |> x -> floor.(Int32,x)
+    state.Tests = (1 .- sympt_prop)'.*state.Tests |> x -> floor.(Int,x)
     
     state.R += sum(state.Tests[1,:])
     state.I -= state.Tests[1,:]
@@ -277,10 +285,10 @@ end
 - `action::Action` - Current Sim Action
 """
 function Simulate(T::Int, state::State, params::Params, action::Action)
-    susHist = zeros(Int32,T)
-    infHist = zeros(Int32,T)
-    recHist = zeros(Int32,T)
-    incidentHist = zeros(Int32,T)
+    susHist = zeros(Int,T)
+    infHist = zeros(Int,T)
+    recHist = zeros(Int,T)
+    incidentHist = zeros(Int,T)
 
     for day in 1:T
         susHist[day] = state.S 
@@ -354,11 +362,12 @@ function initParams(;symptomatic_isolation_prob::Real=1, asymptomatic_prob::Real
         )
 end
 
+
 """
 # Arguments
 - `I`: Initial infections
     - `I::Distribution` - Sample all elements in Infections array from given distribution
-    - `I::Array{Int,1}`` - Take given array as initial infections array
+    - `I::Array{Int,1}` - Take given array as initial infections array
     - `I::Int` - Take first element of infections array (infection age 0) as given integer
 - `params::Params` - Simulation parameters
 - `N::Int` (opt) - Total Population Size
@@ -381,7 +390,7 @@ function initState(I, params::Params; N=1_000_000)
     
     S0 = N - sum(I0)
     R0 = 0
-    tests = zeros(Int32, params.test_delay+1, horizon)
+    tests = zeros(Int, params.test_delay+1, horizon)
 
     return State(S0, I0, R0, N, tests)
 
