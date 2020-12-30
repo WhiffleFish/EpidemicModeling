@@ -182,20 +182,56 @@ end
 
 function EnsembleFitSIR(T::Int, trajectories::Int64, params::Params, action::Action, lb::Array{Float64,1}, ub::Array{Float64,1})
     @assert length(lb) == length(ub) == 2
-    # Fuck it this shit API sucks, let's do it manually
 
     # Generate Reference Data
     sims = SimulateEnsemble(T, trajectories, params, action, N=1_000_000)
     data_times = 1:T
     ref_data = Array(sims)./1_000_000
 
-    first_guess = [5.,5.]
+    first_guess = [1.,1.]
     initial_conditions = [initSIR(sim) for sim in sims]
 
     LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
 
 
-    result = optimize(x->SIR_param_loss(x,LossCalcParams), lb, ub, first_guess, Fminbox(BFGS()),Optim.Options(show_trace = false))
+    # result = optimize(x->SIR_param_loss(x,LossCalcParams), lb, ub, first_guess, Fminbox(BFGS()),Optim.Options(show_trace=false, show_every=10))
+    result = optimize(x->SIR_param_loss(x,LossCalcParams), lb, ub, first_guess, NelderMead(),Optim.Options(show_trace=false, show_every=10))
+    
+    return result, Optim.minimizer(result)
+end
+
+function SEIR_param_loss(p, LossCalcParams::Dict)
+    # Simulate Trajectories
+    data = cat([Array(SolveODE(:SEIR,LossCalcParams[:IC][i],LossCalcParams[:T], p)) for i in 1:length(LossCalcParams[:IC])]..., dims=3)
+    data[2,:,:] += data[3,:,:]
+    data = data[[1,2,4],:,:]
+    return SIR_loss(data, LossCalcParams[:ref])
+end
+
+function SEIR_param_loss(p, LossCalcParams::Dict, L::Array{Float64})
+    # Simulate Trajectories
+    data = cat([Array(SolveODE(:SEIR,LossCalcParams[:IC][i],LossCalcParams[:T], p)) for i in 1:length(LossCalcParams[:IC])]..., dims=3)
+    L[]
+    data[2,:,:] += data[3,:,:]
+    data = data[[1,2,4],:,:]
+    return SIR_loss(data, LossCalcParams[:ref])
+end
+
+function EnsembleFitSEIR(T::Int, trajectories::Int64, params::Params, action::Action, lb::Array{Float64,1}, ub::Array{Float64,1})
+    @assert length(lb) == length(ub) == 3
+
+    # Generate Reference Data
+    sims = SimulateEnsemble(T, trajectories, params, action, N=1_000_000)
+    data_times = 1:T
+    ref_data = Array(sims)./1_000_000
+
+    first_guess = [1.,1.,1.]
+    initial_conditions = [initSEIR(sim) for sim in sims]
+
+    LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
+
+
+    result = optimize(x->SEIR_param_loss(x,LossCalcParams), first_guess, NelderMead(),Optim.Options(show_trace=true, show_every=10))
     
     return result, Optim.minimizer(result)
 end
