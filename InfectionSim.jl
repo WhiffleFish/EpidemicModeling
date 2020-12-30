@@ -151,11 +151,11 @@ end
 
 
 function Array(simHist::SimHist)
-    hcat(simHist.sus,simHist.inf, simHist.rec) |> transpose |> Array
+    hcat(simHist.sus, simHist.inf, simHist.rec) |> transpose |> Array
 end
 
 function Array(state::State)
-    [state.sus, state.inf, state.rec]
+    [state.S, sum(state.I), state.R]
 end
 
 """
@@ -306,6 +306,33 @@ end
 
 """
 # Arguments
+- `T::Int64` - Simulation Time (days)
+- `trajectories::Int64` - Total number of simulations
+- `params::Params` - Simulation Parameters
+- `action::Action` - Testing Action
+- `N::Int=1_000_000` - (opt) Population Size
+# Return
+- `Vector{SimHist}`
+"""
+function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, action::Action; N::Int=1_000_000)
+    [Simulate(T, initState(params, N=N), params, action) for _ in 1:trajectories]
+end
+
+"""
+Convert Simulation SimulateEnsemble output to 3D Array
+# Arguments
+- `histvec::Vector{SimHist}` - Vector of SimHist structs
+"""
+function Array(histvec::Vector{SimHist})
+    arr = zeros(Int64, 3, histvec[1].T, length(histvec))
+    for i in eachindex(histvec)
+        arr[:,:,i] = Array(histvec[i])
+    end
+    return arr
+end
+
+"""
+# Arguments
 - `hist::SimHist` - Simulation Data History
 - `prop::Bool=true` - Graph as subpopulations as percentage (proportion) of total population
 - `kind::Symbol=:line` - `:line` to graph all trajectories on top of each other; ``:stack` for stacked line plot
@@ -372,7 +399,7 @@ end
 - `params::Params` - Simulation parameters
 - `N::Int` (opt) - Total Population Size
 """
-function initState(I, params::Params; N=1_000_000)
+function initState(I, params::Params; N::Int=1_000_000)
     horizon = length(params.Infdistributions)
     if isa(I, Distribution)
         I0 = round.(Int,rand(truncated(I,0,Inf),horizon))
@@ -394,4 +421,37 @@ function initState(I, params::Params; N=1_000_000)
 
     return State(S0, I0, R0, N, tests)
 
+end
+
+"""
+Completely Random Initial State
+# Arguments
+- `params::Params` - Simulation parameters
+- `N::Int` (opt) - Total Population Size
+"""
+function initState(params::Params; N::Int=1_000_000)
+    horizon = length(params.Infdistributions)
+    
+    sus = rand()
+    inf = rand(horizon)./horizon
+    rec = rand()
+    
+    total = sus + sum(inf) + rec
+    S = round(Int, sus*N/total)
+    I = round.(Int, inf.*N./total)
+    R = round(Int, rec*N/total)
+
+    leftover = N - (S + sum(I) + R)
+
+    if 0 <= S+leftover <= N
+        S += leftover
+    elseif 0 <= R+leftover <= N
+        R += leftover
+    else 
+        throw(BoundsError("RNG Bounds Error, Run Again"))
+    end
+    
+    tests = zeros(Int, params.test_delay+1, horizon)
+
+    return State(S, I, R, N, tests)
 end
