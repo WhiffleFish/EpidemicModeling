@@ -33,7 +33,7 @@ function SolveODE(kind::Symbol, u0::Array{Float64, 1}, T::Int, p::Union{Array{Fl
     else
         throw(DomainError("Unrecognized model kind. Must be :SIR or :SEIR"))
     end
-    return solve(prob)
+    return solve(prob, saveat=1:T)
 end
 
 """
@@ -162,7 +162,6 @@ function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Para
         throw(DomainError("Unrecognized model kind. Must be :SIR or :SEIR"))
     end
     
-    # SHOULD BE MOVED AFTER IF ELSE
     monte_prob = MonteCarloProblem(prob, prob_func=prob_func)
     obj = build_loss_objective(
         monte_prob, Tsit5(), loss_func, verbose_opt=true,
@@ -174,10 +173,32 @@ function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Para
     return result, Optim.minimizer(result)
 end
 
-function EnsembleFitSIR(T::Int, trajectories::Int64, params::Params, action::Action, lb::Array{Float64,1}, ub::Array{Float64,1})
-    
+
+function SIR_param_loss(p, LossCalcParams::Dict)
+    # Simulate Trajectories
+    data = cat([Array(SolveODE(:SIR,LossCalcParams[:IC][i],LossCalcParams[:T], p)) for i in 1:length(LossCalcParams[:IC])]..., dims=3)
+    return SIR_loss(data, LossCalcParams[:ref])
 end
 
+function EnsembleFitSIR(T::Int, trajectories::Int64, params::Params, action::Action, lb::Array{Float64,1}, ub::Array{Float64,1})
+    @assert length(lb) == length(ub) == 2
+    # Fuck it this shit API sucks, let's do it manually
+
+    # Generate Reference Data
+    sims = SimulateEnsemble(T, trajectories, params, action, N=1_000_000)
+    data_times = 1:T
+    ref_data = Array(sims)./1_000_000
+
+    first_guess = [5.,5.]
+    initial_conditions = [initSIR(sim) for sim in sims]
+
+    LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
+
+
+    result = optimize(x->SIR_param_loss(x,LossCalcParams), lb, ub, first_guess, Fminbox(BFGS()),Optim.Options(show_trace = false))
+    
+    return result, Optim.minimizer(result)
+end
 
 function initSEIR(simHist::SimHist)
     [simHist.sus[1], 0, simHist.inf[1], simHist.rec[1]]./simHist.N
