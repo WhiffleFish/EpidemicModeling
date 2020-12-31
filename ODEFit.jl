@@ -36,7 +36,23 @@ function SolveODE(kind::Symbol, u0::Array{Float64, 1}, T::Int, p::Union{Array{Fl
     return solve(prob, saveat=1:T)
 end
 
+
 """
+Get initial SIR state (in proportions of pop) of given Simulation History
+"""
+function initSIR(simHist::SimHist)
+    Array(simHist)[:, 1]./simHist.N
+end
+
+"""
+Get initial SEIR state (in proportions of pop) of given Simulation History
+"""
+function initSEIR(simHist::SimHist)
+    [simHist.sus[1], 0, simHist.inf[1], simHist.rec[1]]./simHist.N
+end
+
+"""
+2-D Array L2 SIR Loss
 # Arguments
 - `x` - Output Data
 - `ref_data` - Reference Data
@@ -45,20 +61,13 @@ function SIR_loss(x, ref_data)
     sum((Array(x) .- ref_data).^2)
 end
 
-function SIR_loss_grad(x, ref_data)
-    2*sum((Array(x) .- ref_data))
-end
-
-
-# function SEIR_loss(x, ref_data, L::Array{Float64,2}) # with cache
-#     L[1,:] = x[1,:]
-#     L[2,:] = sum(x[2:3,:], dims=1)[1,:]
-#     L[3,:] = x[4,:]
-#     sum((L .- ref_data).^2)
-# end
-
-
-function SEIR_loss(x, ref_data) # without cache
+"""
+2-D Array L2 SEIR Loss
+# Arguments
+- `x` - Output Data
+- `ref_data` - Reference Data
+"""
+function SEIR_loss(x, ref_data)
     L = zeros(3,size(ref_data)[2])
     L[1,:] = x[1,:]
     L[2,:] = sum(x[2:3,:], dims=1)[1,:]
@@ -80,12 +89,12 @@ function FitModel(kind::Symbol, simHist::SimHist, lb::Array{Float64,1}, ub::Arra
     data_times = 1:T
 
     if kind == :SIR
-        u0 = ref[:,1] # replace with initSIR
+        u0 = ref[:,1]
         p = ones(Float64,2)
         prob = ODEProblem(SIR_ODE, u0, (1. ,Float64(T)), p, saveat=data_times)
         objective = build_loss_objective(prob, Tsit5(), x -> SIR_loss(x, ref));
     elseif kind == :SEIR
-        u0 = [1. - ref[2,1]-ref[3,1], 0, ref[2,1], ref[3,1]] # replace with initSEIR
+        u0 = initSEIR(simHist)
         p = ones(Float64,3)
         prob = ODEProblem(SEIR_ODE, u0, (1. ,Float64(T)), p, saveat=data_times)
         objective = build_loss_objective(prob, Tsit5(), x->SEIR_loss(x,ref));
@@ -98,29 +107,13 @@ function FitModel(kind::Symbol, simHist::SimHist, lb::Array{Float64,1}, ub::Arra
     return result, Optim.minimizer(result)
 end
 
-#=
-N = 10;
-initial_conditions = [[1.0,1.0], [1.0,1.5], [1.5,1.0], [1.5,1.5], [0.5,1.0], [1.0,0.5], [0.5,0.5], [2.0,1.0], [1.0,2.0], [2.0,2.0]]
-function prob_func(prob,i,repeat)
-  ODEProblem(prob.f,initial_conditions[i],prob.tspan,prob.p)
-end
-monte_prob = MonteCarloProblem(prob, prob_func=prob_func)
 
-data_times = 0:0.1:10
-sim = solve(monte_prob, Tsit5(), trajectories=N, saveat=data_times)
-data = Array(sim)
 
-losses = [L2Loss(data_times,data[:,:,i]) for i in 1:N]
+#=--------------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ENSEMBLE FITTING ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+--------------------------------------------------------------------------------------=#
 
-loss(sim) = sum(losses[i](sim[i]) for i in 1:N)
 
-obj = build_loss_objective(monte_prob, Tsit5(), loss, trajectories=N, saveat=data_times)
-
-lower = zeros(2)
-upper = fill(2.0,2)
-
-result = optimize(obj, lower, upper, [1.3,0.9], Fminbox(BFGS()))
-=#
 """
 Fit parameters to multiple random simulation outputs
 # Arguments
@@ -129,117 +122,52 @@ Fit parameters to multiple random simulation outputs
 - `trajectories::Int64` - Number of random simulations to fit
 - `params::Params` - Simulation Parameters
 - `action::Action` - Simulation Action
-- `lb::Array{Float64,1}` - Parameter search lower bound
-- `ub::Array{Float64,1}` - Parameter search upper bound
 """
-function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Params, action::Action, lb::Array{Float64,1}, ub::Array{Float64,1})
+function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Params, action::Action)
 
     sims = SimulateEnsemble(T, trajectories, params, action, N=1_000_000)
     data_times = 1:T
     ref_data = Array(sims)./1_000_000
 
     if kind == :SIR
-        @assert length(lb) == length(ub) == 2
-        first_guess = [5.,5.]
+        first_guess = [0.1,0.1]
         initial_conditions = [initSIR(sim) for sim in sims]
-        prob = ODEProblem(SIR_ODE, initial_conditions[1], (1.,Float64(T)), first_guess)
 
-        prob_func(prob, i, repeat) = ODEProblem(SIR_ODE, initial_conditions[i], (1.,Float64(T)), first_guess)
-        loss_func(x) = SIR_loss(x, ref_data)
+        LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
+
+        result = optimize(x->SIR_param_loss(x,LossCalcParams), first_guess, NelderMead(),Optim.Options(show_trace=false, show_every=10))
     
     elseif kind == :SEIR
-        @assert length(lb) == length(ub) == 3
-        first_guess = [1., 1., 1.]
+        first_guess = [0.1, 0.1, 0.1]
         initial_conditions = [initSEIR(sim) for sim in sims]
 
-        prob = ODEProblem(SEIR_ODE, initial_conditions[1], (1.,Float64(T)), first_guess)
-        
-        prob_func(prob, i, repeat) = ODEProblem(SEIR_ODE, initial_conditions[i], (1.,Float64(T)), first_guess)
-        
-        loss_func(x) = SEIR_loss(x, ref_data)
+        LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
+
+        result = optimize(x->SEIR_param_loss(x,LossCalcParams), first_guess, NelderMead(),Optim.Options(show_trace=true, show_every=10))
 
     else
         throw(DomainError("Unrecognized model kind. Must be :SIR or :SEIR"))
     end
-    
-    monte_prob = MonteCarloProblem(prob, prob_func=prob_func)
-    obj = build_loss_objective(
-        monte_prob, Tsit5(), loss_func, verbose_opt=true,
-        trajectories=trajectories, saveat=data_times
-    )
 
-    result = optimize(obj, lb, ub, first_guess, Fminbox(BFGS()))
-    
     return result, Optim.minimizer(result)
 end
 
 
-function SIR_param_loss(p, LossCalcParams::Dict)
-    # Simulate Trajectories
-    data = cat([Array(SolveODE(:SIR,LossCalcParams[:IC][i],LossCalcParams[:T], p)) for i in 1:length(LossCalcParams[:IC])]..., dims=3)
-    return SIR_loss(data, LossCalcParams[:ref])
+function SIR_param_loss(p::Vector{Float64}, LossCalcParams::Dict)
+    loss = 0.
+    for i in 1:length(LossCalcParams[:IC])
+        data = Array(SolveODE(:SIR, LossCalcParams[:IC][i],LossCalcParams[:T], p))
+        loss += sum((data .- LossCalcParams[:ref][:,:,i]).^2)
+    end
+    return loss
 end
 
-function EnsembleFitSIR(T::Int, trajectories::Int64, params::Params, action::Action, lb::Array{Float64,1}, ub::Array{Float64,1})
-    @assert length(lb) == length(ub) == 2
-
-    # Generate Reference Data
-    sims = SimulateEnsemble(T, trajectories, params, action, N=1_000_000)
-    data_times = 1:T
-    ref_data = Array(sims)./1_000_000
-
-    first_guess = [1.,1.]
-    initial_conditions = [initSIR(sim) for sim in sims]
-
-    LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
-
-
-    # result = optimize(x->SIR_param_loss(x,LossCalcParams), lb, ub, first_guess, Fminbox(BFGS()),Optim.Options(show_trace=false, show_every=10))
-    result = optimize(x->SIR_param_loss(x,LossCalcParams), lb, ub, first_guess, NelderMead(),Optim.Options(show_trace=false, show_every=10))
-    
-    return result, Optim.minimizer(result)
-end
-
-function SEIR_param_loss(p, LossCalcParams::Dict)
-    # Simulate Trajectories
-    data = cat([Array(SolveODE(:SEIR,LossCalcParams[:IC][i],LossCalcParams[:T], p)) for i in 1:length(LossCalcParams[:IC])]..., dims=3)
-    data[2,:,:] += data[3,:,:]
-    data = data[[1,2,4],:,:]
-    return SIR_loss(data, LossCalcParams[:ref])
-end
-
-function SEIR_param_loss(p, LossCalcParams::Dict, L::Array{Float64})
-    # Simulate Trajectories
-    data = cat([Array(SolveODE(:SEIR,LossCalcParams[:IC][i],LossCalcParams[:T], p)) for i in 1:length(LossCalcParams[:IC])]..., dims=3)
-    L[]
-    data[2,:,:] += data[3,:,:]
-    data = data[[1,2,4],:,:]
-    return SIR_loss(data, LossCalcParams[:ref])
-end
-
-function EnsembleFitSEIR(T::Int, trajectories::Int64, params::Params, action::Action, lb::Array{Float64,1}, ub::Array{Float64,1})
-    @assert length(lb) == length(ub) == 3
-
-    # Generate Reference Data
-    sims = SimulateEnsemble(T, trajectories, params, action, N=1_000_000)
-    data_times = 1:T
-    ref_data = Array(sims)./1_000_000
-
-    first_guess = [1.,1.,1.]
-    initial_conditions = [initSEIR(sim) for sim in sims]
-
-    LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
-
-
-    result = optimize(x->SEIR_param_loss(x,LossCalcParams), first_guess, NelderMead(),Optim.Options(show_trace=true, show_every=10))
-    
-    return result, Optim.minimizer(result)
-end
-
-function initSEIR(simHist::SimHist)
-    [simHist.sus[1], 0, simHist.inf[1], simHist.rec[1]]./simHist.N
-end
-
-function initSIR(simHist::SimHist)
-    Array(simHist)[:, 1]./simHist.N
+function SEIR_param_loss(p::Vector{Float64}, LossCalcParams::Dict)
+    loss = 0.
+    for i in 1:length(LossCalcParams[:IC])
+        data = Array(SolveODE(:SEIR,LossCalcParams[:IC][i],LossCalcParams[:T], p))
+        loss += sum(@. (data[[1,4],:] - LossCalcParams[:ref][[1,3],:,i])^2 )
+        loss += sum(@. (data[2,:] + data[3,:] - LossCalcParams[:ref][2,:,i])^2 ) 
+    end
+    return loss
 end

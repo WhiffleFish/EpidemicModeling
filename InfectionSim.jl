@@ -1,4 +1,5 @@
 using Random, Distributions, Plots, Parameters
+import Plots.plot
 import CSV.File
 import DataFrames.DataFrame
 
@@ -356,6 +357,17 @@ function plotHist(hist::SimHist; prop::Bool=true, kind::Symbol=:line, order::Str
     else
         areaplot(data, labels=labels, ylabel=ylabel, xlabel="Time (Days)", color=colors)
     end
+end
+
+"""
+# Arguments
+- `hist::SimHist` - Simulation Data History
+- `prop::Bool=true` - Graph as subpopulations as percentage (proportion) of total population
+- `kind::Symbol=:line` - `:line` to graph all trajectories on top of each other; ``:stack` for stacked line plot
+- `order::String="SIR"` - Pertains to stacking order for stacked line plot and legend order (arg must be some permutation of chars S,I,R)
+"""
+function plot(hist::SimHist; prop::Bool=true, kind::Symbol=:line, order::String="SIR")
+    plotHist(hist, prop, kind, order)
 end
 
 
