@@ -1,4 +1,4 @@
-using Random, Distributions, Plots, Parameters
+using Random, Distributions, Plots, Parameters, POMDPs
 import Plots.plot
 import CSV.File
 import DataFrames.DataFrame
@@ -83,25 +83,6 @@ end
 
 """
 # Arguments
-- `symptom_dist::Distribution` - Distribution over infection age giving probability of developing symptoms
-- `Infdistributions::Array{UnivariateDistribution,1}` - Fitted Distributions for secondary infections per index case as a function of infection age
-- `symptomatic_isolation_prob::Real= 1` - Probability of isolating after developing symptoms
-- `asymptomatic_prob::Real = 0` - Probability that an infected individual displays no symptoms
-- `pos_test_probs::Array{Float64,1} = zeros(length(Infdistributions))` - Probability of testing positive by exceeding test LOD as a function of infection age ``\\tau``(Default to no testing)
-- `test_delay::Int = 0` - Delay between test being administered and received by subject (days)
-"""
-@with_kw mutable struct Params
-    symptom_dist::Distribution
-    Infdistributions::Array{UnivariateDistribution,1}
-    symptomatic_isolation_prob::Float64 = 1.0
-    asymptomatic_prob::Float64 = 0.0
-    pos_test_probs::Array{Float64,1} = zeros(length(Infdistributions)) # Default to no testing
-    test_delay::Int = 0
-end
-
-
-"""
-# Arguments
 - `S::Int` - Current Susceptible Population
 - `I::Array{Int,1}` - Current Infected Population 
 - `R::Int` - Current Recovered Population
@@ -115,6 +96,37 @@ mutable struct State
     R::Int # Current Recovered Population
     N::Int # Total Population
     Tests::Array{Int,2} # Rows: Days from receiving test result; Columns: Infection Age
+end
+
+
+"""
+Action input to influence epidemic simulation dynamics
+
+# Arguments
+- `testing_prop::Real` - Proportion of population to be tested on one day
+    - Simplification of typical "x-days between tests per person"  action strategy due to non agent-based model
+"""
+mutable struct Action
+    testing_prop::Float64
+end
+    
+
+"""
+# Arguments
+- `symptom_dist::Distribution` - Distribution over infection age giving probability of developing symptoms
+- `Infdistributions::Array{UnivariateDistribution,1}` - Fitted Distributions for secondary infections per index case as a function of infection age
+- `symptomatic_isolation_prob::Real= 1` - Probability of isolating after developing symptoms
+- `asymptomatic_prob::Real = 0` - Probability that an infected individual displays no symptoms
+- `pos_test_probs::Array{Float64,1} = zeros(length(Infdistributions))` - Probability of testing positive by exceeding test LOD as a function of infection age ``\\tau``(Default to no testing)
+- `test_delay::Int = 0` - Delay between test being administered and received by subject (days)
+"""
+@with_kw mutable struct Params <: POMDP{State, Action, Int64} # state::State, action::Action, observation::Int64 - number of pos tests
+    symptom_dist::Distribution
+    Infdistributions::Array{UnivariateDistribution,1}
+    symptomatic_isolation_prob::Float64 = 1.0
+    asymptomatic_prob::Float64 = 0.0
+    pos_test_probs::Array{Float64,1} = zeros(length(Infdistributions)) # Default to no testing
+    test_delay::Int = 0
 end
 
 
@@ -136,19 +148,10 @@ Simulation History
     N::Int # Total Population
     T::Int # Simulation Time
     incident::Array{Int, 1} = nothing # Incident Infections need not always be recorded
+    pos_test::Vector{Int} = nothing # By default do not record testing
 end
  
 
-"""
-Action input to influence epidemic simulation dynamics
-
-# Arguments
-- `testing_prop::Real` - Proportion of population to be tested on one day
-    - Simplification of typical "x-days between tests per person"  action strategy due to non agent-based model
-"""
-mutable struct Action
-    testing_prop::Float64
-end
 
 
 function Array(simHist::SimHist)
@@ -186,6 +189,12 @@ function SymptomaticIsolation(I::Array{Int,1}, params::Params)
         symptomatic_prob = cdf(params.symptom_dist,i) - cdf(params.symptom_dist,i-1)
         isolation_prob = symptomatic_prob*(1-params.asymptomatic_prob)*params.symptomatic_isolation_prob
         isolating[i] = rand(Binomial(inf,isolation_prob))
+        if sum(isolating) > 1_000_000
+            @show isolating
+            @show inf
+            @show I
+            error("Too Many People Isolating :(")
+        end
     end
     return isolating
 end
@@ -196,6 +205,9 @@ end
 - `state::State` - Current Sim State
 - `params::Params` - Simulation parameters
 - `action::Action` - Current Sim Action
+
+# Returns
+- `pos_tests::Vector{Int}` - Vector of positive tests stratified by infection age
 """
 function PositiveTests(state::State, params::Params, action::Action)
     @assert 0 <= action.testing_prop <= 1
@@ -221,8 +233,9 @@ infectious population.
 - `state::State` - Current Sim State
 - `params::Params` - Simulation parameters
 - `action::Action` - Current Sim Action
+- `ret_tests::Bool=false` (opt) - return both new state and positive tests
 """
-function UpdateIsolations(state::State, params::Params, action::Action)
+function UpdateIsolations(state::State, params::Params, action::Action; ret_tests::Bool=false)
 
     sympt = SymptomaticIsolation(state.I, params) # Number of people isolating due to symptoms
     pos_tests = PositiveTests(state, params, action)
@@ -251,7 +264,7 @@ function UpdateIsolations(state::State, params::Params, action::Action)
     state.Tests[:,1] *= 0
     state.Tests[end,:] *= 0
 
-    return state
+    return ret_tests ? (state, pos_tests) : state
 end
 
 
@@ -261,11 +274,12 @@ end
 - `state::State` - Current Sim State
 - `params::Params` - Simulation parameters
 - `action::Action` - Current Sim Action
+- `state_only::Bool=true` (opt) - If `true`, only return state. If `false`, return state, new infections, and positive tests
 """
-function SimStep(state::State, params::Params, action::Action)
+function SimStep(state::State, params::Params, action::Action; state_only::Bool=true)
     
     # Update symptomatic and testing-based isolations
-    state = UpdateIsolations(state, params, action)
+    state, pos_tests = UpdateIsolations(state, params, action; ret_tests=true)
 
     # Incident Infections
     state.R += state.I[end]
@@ -274,7 +288,12 @@ function SimStep(state::State, params::Params, action::Action)
     state.I[1] = new_infections
     state.S -= new_infections
 
-    return state, new_infections
+    if state_only
+        return state
+    else
+        return state, new_infections, pos_tests
+    end
+    
 end
 
 
@@ -290,6 +309,7 @@ function Simulate(T::Int, state::State, params::Params, action::Action)
     infHist = zeros(Int,T)
     recHist = zeros(Int,T)
     incidentHist = zeros(Int,T)
+    testHist = zeros(Int,T)
 
     for day in 1:T
         susHist[day] = state.S 
@@ -297,11 +317,12 @@ function Simulate(T::Int, state::State, params::Params, action::Action)
         recHist[day] = state.R
 
 
-        state, new_infections = SimStep(state, params, action)
+        state, new_infections, pos_tests = SimStep(state, params, action, state_only=false)
         incidentHist[day] = new_infections
+        testHist[day] = sum(pos_tests)
 
     end
-    return SimHist(susHist, infHist, recHist, state.N, T, incidentHist)
+    return SimHist(susHist, infHist, recHist, state.N, T, incidentHist, testHist)
 end
 
 
@@ -360,6 +381,7 @@ function plotHist(hist::SimHist; prop::Bool=true, kind::Symbol=:line, order::Str
 end
 
 """
+Alias for `plotHist`
 # Arguments
 - `hist::SimHist` - Simulation Data History
 - `prop::Bool=true` - Graph as subpopulations as percentage (proportion) of total population
@@ -367,7 +389,7 @@ end
 - `order::String="SIR"` - Pertains to stacking order for stacked line plot and legend order (arg must be some permutation of chars S,I,R)
 """
 function plot(hist::SimHist; prop::Bool=true, kind::Symbol=:line, order::String="SIR")
-    plotHist(hist, prop, kind, order)
+    plotHist(hist, prop=prop, kind=kind, order=order)
 end
 
 
@@ -378,15 +400,15 @@ end
 - `asymptomatic_prob::Real=0`: Probability that individual becomes symptomatic by infection age ``\\tau``, `` \\in [0,1] ``.
 - `LOD::Real=6`: Surveillance Test Limit of Detection (Log Scale).
 - `test_delay::Int=0`: Time between test is administered and result is returned.
-- `infections_path::String="../data/Sample50.csv"`: Path to csv containing MC simulations for daily individual infections.
+- `infections_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/Sample50.csv"`: Path to csv containing MC simulations for daily individual infections.
 - `sample_size::Int=50`: Sample size for `infections_path` csv where row entry is average infections for given sample size.
-- `viral_loads_path::String="../data/raw_viral_load.csv"`: Path to csv containing viral load trajectories (cp/ml) tabulated on a daily basis for each individual.
+- `viral_loads_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/raw_viral_load.csv"`: Path to csv containing viral load trajectories (cp/ml) tabulated on a daily basis for each individual.
 - `horizon::Int=14`: Number of days in infection age before individual is considered naturally recovered and completely uninfectious.
 ...
 """
 function initParams(;symptomatic_isolation_prob::Real=1, asymptomatic_prob::Real=0, LOD::Real=6, 
-    test_delay::Int=0, infections_path::String="../data/Sample50.csv", sample_size::Int=50,
-    viral_loads_path::String="../data/raw_viral_load.csv", horizon::Int=14)
+    test_delay::Int=0, infections_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/Sample50.csv", sample_size::Int=50,
+    viral_loads_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/raw_viral_load.csv", horizon::Int=14)
     
     df = File(infections_path) |> DataFrame;
     viral_loads = File(viral_loads_path) |> DataFrame;

@@ -39,6 +39,8 @@ end
 
 """
 Get initial SIR state (in proportions of pop) of given Simulation History
+# Arguments
+- simHist::simHist
 """
 function initSIR(simHist::SimHist)
     Array(simHist)[:, 1]./simHist.N
@@ -46,6 +48,8 @@ end
 
 """
 Get initial SEIR state (in proportions of pop) of given Simulation History
+# Arguments
+- simHist::simHist
 """
 function initSEIR(simHist::SimHist)
     [simHist.sus[1], 0, simHist.inf[1], simHist.rec[1]]./simHist.N
@@ -58,7 +62,7 @@ end
 - `ref_data` - Reference Data
 """
 function SIR_loss(x, ref_data)
-    sum((Array(x) .- ref_data).^2)
+    sum(abs2, Array(x) .- ref_data)
 end
 
 """
@@ -72,7 +76,7 @@ function SEIR_loss(x, ref_data)
     L[1,:] = x[1,:]
     L[2,:] = sum(x[2:3,:], dims=1)[1,:]
     L[3,:] = x[4,:]
-    sum((L .- ref_data).^2)
+    sum(abs2, L .- ref_data)
 end
 
 
@@ -115,15 +119,16 @@ end
 
 
 """
-Fit parameters to multiple random simulation outputs
+Fit SIR or SEIR model parameters to an ensemble of stochastic simulations 
 # Arguments
 - `kind::Symbol` - Type of differential model to fit (`:SIR` or `:SEIR`)
 - `T::Int` - Simulation Time (days)
 - `trajectories::Int64` - Number of random simulations to fit
 - `params::Params` - Simulation Parameters
 - `action::Action` - Simulation Action
+- `show_trace::Bool = false` (opt) - print live optimization status
 """
-function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Params, action::Action)
+function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Params, action::Action; show_trace::Bool=false)
 
     sims = SimulateEnsemble(T, trajectories, params, action, N=1_000_000)
     data_times = 1:T
@@ -135,7 +140,12 @@ function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Para
 
         LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
 
-        result = optimize(x->SIR_param_loss(x,LossCalcParams), first_guess, NelderMead(),Optim.Options(show_trace=false, show_every=10))
+        result = optimize(
+            x->SIR_param_loss(x,LossCalcParams), 
+            first_guess, 
+            NelderMead(),
+            Optim.Options(show_trace=show_trace, show_every=50)
+        )
     
     elseif kind == :SEIR
         first_guess = [0.1, 0.1, 0.1]
@@ -143,7 +153,12 @@ function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Para
 
         LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
 
-        result = optimize(x->SEIR_param_loss(x,LossCalcParams), first_guess, NelderMead(),Optim.Options(show_trace=true, show_every=10))
+        result = optimize(
+            x->SEIR_param_loss(x,LossCalcParams), 
+            first_guess, 
+            NelderMead(),
+            Optim.Options(show_trace=show_trace, show_every=50)
+        )
 
     else
         throw(DomainError("Unrecognized model kind. Must be :SIR or :SEIR"))
@@ -153,21 +168,31 @@ function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Para
 end
 
 
+"""
+# Arguments
+- `p::Vector{Float64}` - Vector of parameters ``\\alpha, \\beta`` for SIR ODE
+- `LossCalcParams::Dict`
+"""
 function SIR_param_loss(p::Vector{Float64}, LossCalcParams::Dict)
     loss = 0.
     for i in 1:length(LossCalcParams[:IC])
         data = Array(SolveODE(:SIR, LossCalcParams[:IC][i],LossCalcParams[:T], p))
-        loss += sum((data .- LossCalcParams[:ref][:,:,i]).^2)
+        loss += sum(abs2, data .- LossCalcParams[:ref][:,:,i])
     end
-    return loss
+    return loss # TODO: Scale loss by number of MC sims s.t. loss calculated from different number of MC sims is comparable
 end
 
+"""
+# Arguments
+- `p::Vector{Float64}` - Vector of parameters ``\\alpha, \\beta, \\gamma `` for SEIR ODE
+- `LossCalcParams::Dict`
+"""
 function SEIR_param_loss(p::Vector{Float64}, LossCalcParams::Dict)
     loss = 0.
     for i in 1:length(LossCalcParams[:IC])
         data = Array(SolveODE(:SEIR,LossCalcParams[:IC][i],LossCalcParams[:T], p))
-        loss += sum(@. (data[[1,4],:] - LossCalcParams[:ref][[1,3],:,i])^2 )
-        loss += sum(@. (data[2,:] + data[3,:] - LossCalcParams[:ref][2,:,i])^2 ) 
+        loss += sum(abs2, data[[1,4],:] .- LossCalcParams[:ref][[1,3],:,i] )
+        loss += sum(abs2, data[2,:] + data[3,:] .- LossCalcParams[:ref][2,:,i] ) 
     end
     return loss
 end

@@ -1,5 +1,5 @@
 .ipynb_checkpoints/
-*Test*
+ignore/
 .vscode
 .virtual_documents
 InfectionDistributionsAtt1
