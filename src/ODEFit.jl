@@ -7,6 +7,13 @@ SIR_ODE = @ode_def SIR begin
     dR = α*I
 end α β
 
+SIR_CTRL = @ode_def SIR_C begin
+    dS = -β*I*S
+    dI = β*I*S - (α+δ)*I
+    dR = (α+δ*T)*I
+    dT = 1 # Testing Proportion
+end α β δ
+# Create Modified ODE where α ← α + δT   where T is testing rate and δ is proportional effectiveness of testing
 
 SEIR_ODE = @ode_def SEIR begin
     dS = -β*I*S
@@ -33,7 +40,7 @@ function SolveODE(kind::Symbol, u0::Array{Float64, 1}, T::Int, p::Union{Array{Fl
     else
         throw(DomainError("Unrecognized model kind. Must be :SIR or :SEIR"))
     end
-    return solve(prob, saveat=1:T)
+    return DifferentialEquations.solve(prob, saveat=1:T)
 end
 
 
@@ -179,7 +186,9 @@ function SIR_param_loss(p::Vector{Float64}, LossCalcParams::Dict)
         data = Array(SolveODE(:SIR, LossCalcParams[:IC][i],LossCalcParams[:T], p))
         loss += sum(abs2, data .- LossCalcParams[:ref][:,:,i])
     end
-    return loss # TODO: Scale loss by number of MC sims s.t. loss calculated from different number of MC sims is comparable
+
+    # Scale loss by number of MC sims s.t. loss calculated from different number of MC sims is comparable
+    return loss/length(LossCalcParams[:IC]) 
 end
 
 """
@@ -194,5 +203,7 @@ function SEIR_param_loss(p::Vector{Float64}, LossCalcParams::Dict)
         loss += sum(abs2, data[[1,4],:] .- LossCalcParams[:ref][[1,3],:,i] )
         loss += sum(abs2, data[2,:] + data[3,:] .- LossCalcParams[:ref][2,:,i] ) 
     end
-    return loss
+    
+    # Scale loss by number of MC sims s.t. loss calculated from different number of MC sims is comparable
+    return loss/length(LossCalcParams[:IC])
 end
