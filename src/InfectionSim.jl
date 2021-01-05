@@ -327,6 +327,7 @@ end
 
 
 """
+Run multiple simulations with random initial states but predefined actions
 # Arguments
 - `T::Int64` - Simulation Time (days)
 - `trajectories::Int64` - Total number of simulations
@@ -339,6 +340,22 @@ end
 function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, action::Action; N::Int=1_000_000)
     [Simulate(T, initState(params, N=N), params, action) for _ in 1:trajectories]
 end
+
+"""
+Run multiple simulations with varying predefined actions and random initial states
+# Arguments
+- `T::Int64` - Simulation Time (days)
+- `trajectories::Int64` - Total number of simulations
+- `params::Params` - Simulation Parameters
+- `actions::Vector{Action}` - 
+- `N::Int=1_000_000` - (opt) Population Size
+# Return
+- `Vector{SimHist}`
+"""
+function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, actions::Vector{Action}; N::Int=1_000_000)
+    [Simulate(T, initState(params, N=N), params, actions[i]) for i in 1:trajectories]
+end
+
 
 """
 Convert Simulation SimulateEnsemble output to 3D Array
