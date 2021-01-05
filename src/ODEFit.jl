@@ -7,13 +7,14 @@ SIR_ODE = @ode_def SIR begin
     dR = α*I
 end α β
 
+# Create Modified ODE where α ← α + δT   where T is testing rate and δ is proportional effectiveness of testing
 SIR_CTRL = @ode_def SIR_C begin
     dS = -β*I*S
-    dI = β*I*S - (α+δ)*I
+    dI = β*I*S - (α+δ*T)*I
     dR = (α+δ*T)*I
     dT = 1 # Testing Proportion
 end α β δ
-# Create Modified ODE where α ← α + δT   where T is testing rate and δ is proportional effectiveness of testing
+
 
 SEIR_ODE = @ode_def SEIR begin
     dS = -β*I*S
@@ -21,6 +22,14 @@ SEIR_ODE = @ode_def SEIR begin
     dI = γ*E - α*I
     dR = α*I
 end α β γ
+
+SEIR_CTRL = @ode_def SEIR_C begin
+    dS = -β*I*S
+    dE = β*I*S - (γ+ϵ*T)*E
+    dI = (γ+ϵ*T)*E - (α+δ*T)*I
+    dR = (α+δ*T)*I
+    dT = 1 # Testing Proportion
+end α β γ δ ϵ
 
 
 """
@@ -91,10 +100,8 @@ end
 # Arguments
 - `kind::Symbol`
 - `simHist::SimHist` 
-- `lb::Array{Float64,1}` 
-- `ub::Array{Float64,1}`
 """
-function FitModel(kind::Symbol, simHist::SimHist, lb::Array{Float64,1}, ub::Array{Float64,1})
+function FitModel(kind::Symbol, simHist::SimHist)
     ref = Array(simHist)./simHist.N
     T = simHist.T
     data_times = 1:T
@@ -113,16 +120,16 @@ function FitModel(kind::Symbol, simHist::SimHist, lb::Array{Float64,1}, ub::Arra
         throw(DomainError("Unrecognized Model kind. Must be :SIR or :SEIR"))
     end
 
-    result = optimize(objective, lb, ub, p, Fminbox(BFGS()))
+    result = optimize(objective, p, NelderMead())
     
     return result, Optim.minimizer(result)
 end
 
 
 
-#=--------------------------------------------------------------------------------------
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ENSEMBLE FITTING ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
---------------------------------------------------------------------------------------=#
+# ---------------------------------------------------------------------------- #
+#                               ENSEMBLE FITTING                               #
+# ---------------------------------------------------------------------------- #
 
 
 """

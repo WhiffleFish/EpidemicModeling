@@ -20,7 +20,7 @@ state = initState(fill(10_000,14),param, N=1_000_000)
 action = Action(0.0)
 simHist_SingleSIR = Simulate(T, state, param, action)
 
-res, p = FitModel(:SIR, simHist_SingleSIR, zeros(2), fill(10.,2))
+res, p = FitModel(:SIR, simHist_SingleSIR)
 
 sol = SolveODE(:SIR, initSIR(simHist_SingleSIR), simHist_SingleSIR.T, p);
 
@@ -42,7 +42,7 @@ state = initState(param, N=1_000_000)
 action = Action(0.0)
 simHist = Simulate(T, state, param, action)
 
-res, p = FitModel(:SEIR, simHist, zeros(3), fill(10.,3))
+res, p = FitModel(:SEIR, simHist)
 
 sol = SolveODE(:SEIR, initSEIR(simHist), simHist.T, p);
 
