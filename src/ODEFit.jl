@@ -69,12 +69,30 @@ function initSIR(simHist::SimHist)
 end
 
 """
+Get initial SIR state (in proportions of pop) of given State
+# Arguments
+- state::State
+"""
+function initSIR(state::State)
+    Array(state)./simHist.N
+end
+
+"""
 Get initial SEIR state (in proportions of pop) of given Simulation History
 # Arguments
 - simHist::simHist
 """
 function initSEIR(simHist::SimHist)
     [simHist.sus[1], 0, simHist.inf[1], simHist.rec[1]]./simHist.N
+end
+
+"""
+Get initial SEIR state (in proportions of pop) of given State
+# Arguments
+- state::State
+"""
+function initSEIR(state::State)
+    [state.S, 0.0, state.I, state.R]./state.N
 end
 
 """
@@ -195,7 +213,6 @@ Fit SIR or SEIR model parameters to an ensemble of stochastic simulations
 - `T::Int` - Simulation Time (days)
 - `trajectories::Int64` - Number of random simulations to fit
 - `params::Params` - Simulation Parameters
-- `action::Action` - Simulation Action
 - `show_trace::Bool = false` (opt) - print live optimization status
 """
 function FitRandControlledEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Params; show_trace::Bool=false)
@@ -207,7 +224,7 @@ function FitRandControlledEnsemble(kind::Symbol, T::Int, trajectories::Int64, pa
     ref_data = Array(sims)./1_000_000
 
     if kind == :SIR
-        first_guess = [0.1, 0.1, 1.]
+        first_guess = [0.1, 0.1, 0.1]
         initial_conditions = [vcat(initSIR(sim),actions[i].testing_prop) for (i,sim) in enumerate(sims)]
 
         LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
@@ -304,4 +321,35 @@ function SEIR_CTRL_param_loss(p::Vector{Float64}, LossCalcParams::Dict)
     
     # Scale loss by number of MC sims s.t. loss calculated from different number of MC sims is comparable
     return loss/length(LossCalcParams[:IC])
+end
+
+
+"""
+Convert controlled/uncontrolled SIR/SEIR models to pure SIR arrays
+# Arguments
+- `sol` - Output of DifferentialEquations.jl solver
+"""
+function toSIR(sol)
+    syms = sol.prob.f.syms
+    
+    if syms == [:S, :I, :R]
+        return Array(sol)
+
+    elseif syms == [:S, :I, :R, :T]
+        return sol[1:3,:]
+
+    elseif syms == [:S, :E, :I, :R]
+        arr = zeros(3, size(sol,2))
+        arr[[1,3],:] = sol[[1,4],:]
+        arr[2,:] = sol[2,:] .+ sol[3,:]
+        return arr
+
+    elseif syms == [:S, :E, :I, :R, :T]
+        arr = zeros(3, size(sol,2))
+        arr[[1,3],:] = sol[[1,4],:]
+        arr[2,:] = sol[2,:] .+ sol[3,:]
+        return arr
+    else
+        error("Unknown Compartmental Solution Type")
+    end
 end

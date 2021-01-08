@@ -94,7 +94,7 @@ mutable struct State
     S::Int # Current Susceptible Population
     I::Array{Int,1} # Current Infected Population 
     R::Int # Current Recovered Population
-    N::Int # Total Population
+    N::Int # Total Population - move to params
     Tests::Array{Int,2} # Rows: Days from receiving test result; Columns: Infection Age
 end
 
