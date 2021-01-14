@@ -12,26 +12,28 @@ Fit Distributions to MC sim data for secondary infections per index case as a fu
 - `horizon::Int=14` - Number of days in infection age before individual is considered naturally recovered and completely uninfectious.
 - `sample_size::Int=50` - Sample size for `infections_path` csv where row entry is average infections for given sample size.
 """
-function FitInfectionDistributions(df::DataFrame, horizon::Int=14, sample_size::Int=50)
+function FitInfectionDistributions(df::DataFrame, horizon::Int=14, sample_size::Int=50)::Vector{UnivariateDistribution}
     distributions = []
     for day in 1:horizon
         try # Initially try to fit Gamma
-            shape, scale = params(fit(Gamma, df[!,day]))
+            shape, scale = Distributions.params(fit(Gamma, df[!,day]))
             push!(distributions, Gamma(shape/sample_size, scale*sample_size))
         catch e
 
             if isa(e, ArgumentError)
                 try # If this doesn't work, try Exponential
                     weights = min.(log.(1 ./ df[!,day]),10)
-                    β = params(fit(Exponential, df[!,day], weights))[1]
+                    β = Distributions.params(fit(Exponential, df[!,day], weights))[1]
                     push!(distributions, Gamma(1/sample_size, β*sample_size))
                 catch e # If exponential doesn't work either, use dirac 0 dist
-                    if isa(e,ArgumentError)
+                    if isa(e, ArgumentError)
                         push!(distributions, Normal(0,0))
+                    else
+                        throw(e)
                     end
                 end
             end
-        
+
         end
     end
     return distributions
@@ -46,7 +48,7 @@ Proportion of infectious population above some limit of detection from MC simula
 - `day::Int` - Infection age (day)
 - `LOD::Real` - Limit of detection (Log scale: ``10^x \\rightarrow x``)
 """
-function prop_above_LOD(df::DataFrame, day::Int, LOD::Real)
+function prop_above_LOD(df::DataFrame, day::Int, LOD::Real)::Float64
     sum(df[!,day] .> LOD)/size(df)[1]
 end
 
@@ -58,8 +60,8 @@ Return distribution resulting from sum of i.i.d RV's characterized by Normal dis
 - `dist::Normal` - Distribution characterizing random variable
 - `N::Int` - Number of i.i.d RV's summed
 """
-function RVsum(dist::Normal, N::Int)
-    μ, σ = params(dist)
+function RVsum(dist::Normal, N::Int)::Normal
+    μ, σ = Distributions.params(dist)
     return Normal(μ*N,σ*N)
 end
 
@@ -71,8 +73,8 @@ Return distribution resulting from sum of i.i.d RV's characterized by Gamma dist
 - `dist::Gamma` - Distribution characterizing random variable
 - `N::Int` - Number of i.i.d RV's summed
 """
-function RVsum(dist::Gamma, N::Int)
-    k, θ = params(dist)
+function RVsum(dist::Gamma, N::Int)::UnivariateDistribution
+    k, θ = Distributions.params(dist)
     if k*N > 0
         return Gamma(k*N, θ)
     else
@@ -84,15 +86,15 @@ end
 """
 # Arguments
 - `S::Int` - Current Susceptible Population
-- `I::Array{Int,1}` - Current Infected Population 
+- `I::Array{Int,1}` - Current Infected Population
 - `R::Int` - Current Recovered Population
 - `N::Int` - Total Population
-- `Tests::Array{Int,2}` - Array for which people belonging to array element ``T_{i,j}`` are ``i-1`` days away 
+- `Tests::Array{Int,2}` - Array for which people belonging to array element ``T_{i,j}`` are ``i-1`` days away
     from receiving positive test and have infection age ``j``
 """
 mutable struct State
     S::Int # Current Susceptible Population
-    I::Array{Int,1} # Current Infected Population 
+    I::Array{Int,1} # Current Infected Population
     R::Int # Current Recovered Population
     N::Int # Total Population - move to params
     Tests::Array{Int,2} # Rows: Days from receiving test result; Columns: Infection Age
@@ -109,7 +111,7 @@ Action input to influence epidemic simulation dynamics
 mutable struct Action
     testing_prop::Float64
 end
-    
+
 
 """
 # Arguments
@@ -150,15 +152,13 @@ Simulation History
     incident::Array{Int, 1} = nothing # Incident Infections need not always be recorded
     pos_test::Vector{Int} = nothing # By default do not record testing
 end
- 
 
 
-
-function Array(simHist::SimHist)
+function Array(simHist::SimHist)::Array{Int64,2}
     hcat(simHist.sus, simHist.inf, simHist.rec) |> transpose |> Array
 end
 
-function Array(state::State)
+function Array(state::State)::Vector{Int64}
     [state.S, sum(state.I), state.R]
 end
 
@@ -167,7 +167,7 @@ end
 - `state::State` - Current Sim State
 - `params::Params` - Simulation parameters
 """
-function IncidentInfections(state::State, params::Params)
+function IncidentInfections(state::State, params::Params)::Int64
     infSum = 0
     for (i, inf) in enumerate(state.I)
         infSum += rand(RVsum(params.Infdistributions[i],inf))
@@ -183,7 +183,7 @@ end
 - `I::Array{Int,1}` - Current infectious population vector (divided by infection age)
 - `params::Params` - Simulation parameters
 """
-function SymptomaticIsolation(I::Array{Int,1}, params::Params)
+function SymptomaticIsolation(I::Array{Int,1}, params::Params)::Vector{Int64}
     isolating = zero(I)
     for (i, inf) in enumerate(I)
         symptomatic_prob = cdf(params.symptom_dist,i) - cdf(params.symptom_dist,i-1)
@@ -209,7 +209,7 @@ end
 # Returns
 - `pos_tests::Vector{Int}` - Vector of positive tests stratified by infection age
 """
-function PositiveTests(state::State, params::Params, action::Action)
+function PositiveTests(state::State, params::Params, action::Action)::Vector{Int64}
     @assert 0 <= action.testing_prop <= 1
     # TODO: Don't test the same people twice!
     pos_tests = zeros(Int,length(params.pos_test_probs))
@@ -224,7 +224,7 @@ end
 
 
 """
-Given current state and simulation parameters, return state for which Infectious population is decreased by surveillance testing and symptomatic isolation.  
+Given current state and simulation parameters, return state for which Infectious population is decreased by surveillance testing and symptomatic isolation.
 Isolation due to receiving a positive test and isolation due to developing symptoms are not disjoint, therefore both must be calculated together.
 Some waiting for a test to return may develop symptoms and isolate, therefore we cannot simply count these two events as two deductions from the
 infectious population.
@@ -249,17 +249,17 @@ function UpdateIsolations(state::State, params::Params, action::Action; ret_test
     state.Tests[end,:] = pos_tests
 
     state.Tests = (1 .- sympt_prop)'.*state.Tests |> x -> floor.(Int,x)
-    
+
     state.R += sum(state.Tests[1,:])
     state.I -= state.Tests[1,:]
-    
+
     @assert all(state.I .>= 0)
 
     # Progress testing state forward
     # People k days from receiving test back are now k-1 days from receiving test
     # Tested individuals with infection age t move to infection age t + 1
     state.Tests = circshift(state.Tests,(-1,1))
-    
+
     # Tests and infection ages do not roll back to beginning; clear last row and first column
     state.Tests[:,1] *= 0
     state.Tests[end,:] *= 0
@@ -277,7 +277,7 @@ end
 - `state_only::Bool=true` (opt) - If `true`, only return state. If `false`, return state, new infections, and positive tests
 """
 function SimStep(state::State, params::Params, action::Action; state_only::Bool=true)
-    
+
     # Update symptomatic and testing-based isolations
     state, pos_tests = UpdateIsolations(state, params, action; ret_tests=true)
 
@@ -293,7 +293,7 @@ function SimStep(state::State, params::Params, action::Action; state_only::Bool=
     else
         return state, new_infections, pos_tests
     end
-    
+
 end
 
 
@@ -304,7 +304,7 @@ end
 - `params::Params` - Simulation parameters
 - `action::Action` - Current Sim Action
 """
-function Simulate(T::Int, state::State, params::Params, action::Action)
+function Simulate(T::Int, state::State, params::Params, action::Action)::SimHist
     susHist = zeros(Int,T)
     infHist = zeros(Int,T)
     recHist = zeros(Int,T)
@@ -312,7 +312,7 @@ function Simulate(T::Int, state::State, params::Params, action::Action)
     testHist = zeros(Int,T)
 
     for day in 1:T
-        susHist[day] = state.S 
+        susHist[day] = state.S
         infHist[day] = sum(state.I)
         recHist[day] = state.R
 
@@ -337,7 +337,7 @@ Run multiple simulations with random initial states but predefined actions
 # Return
 - `Vector{SimHist}`
 """
-function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, action::Action; N::Int=1_000_000)
+function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, action::Action; N::Int=1_000_000)::Vector{SimHist}
     [Simulate(T, initState(params, N=N), params, action) for _ in 1:trajectories]
 end
 
@@ -347,12 +347,12 @@ Run multiple simulations with varying predefined actions and random initial stat
 - `T::Int64` - Simulation Time (days)
 - `trajectories::Int64` - Total number of simulations
 - `params::Params` - Simulation Parameters
-- `actions::Vector{Action}` - 
+- `actions::Vector{Action}` -
 - `N::Int=1_000_000` - (opt) Population Size
 # Return
 - `Vector{SimHist}`
 """
-function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, actions::Vector{Action}; N::Int=1_000_000)
+function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, actions::Vector{Action}; N::Int=1_000_000)::Vector{SimHist}
     [Simulate(T, initState(params, N=N), params, actions[i]) for i in 1:trajectories]
 end
 
@@ -362,7 +362,7 @@ Convert Simulation SimulateEnsemble output to 3D Array
 # Arguments
 - `histvec::Vector{SimHist}` - Vector of SimHist structs
 """
-function Array(histvec::Vector{SimHist})
+function Array(histvec::Vector{SimHist})::Array{Int64,3}
     arr = zeros(Int64, 3, histvec[1].T, length(histvec))
     for i in eachindex(histvec)
         arr[:,:,i] = Array(histvec[i])
@@ -423,10 +423,10 @@ end
 - `horizon::Int=14`: Number of days in infection age before individual is considered naturally recovered and completely uninfectious.
 ...
 """
-function initParams(;symptomatic_isolation_prob::Real=1, asymptomatic_prob::Real=0, LOD::Real=6, 
+function initParams(;symptomatic_isolation_prob::Real=1, asymptomatic_prob::Real=0, LOD::Real=6,
     test_delay::Int=0, infections_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/Sample50.csv", sample_size::Int=50,
-    viral_loads_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/raw_viral_load.csv", horizon::Int=14)
-    
+    viral_loads_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/raw_viral_load.csv", horizon::Int=14)::Params
+
     df = File(infections_path) |> DataFrame;
     viral_loads = File(viral_loads_path) |> DataFrame;
 
@@ -435,7 +435,7 @@ function initParams(;symptomatic_isolation_prob::Real=1, asymptomatic_prob::Real
     symptom_dist = LogNormal(1.644,0.363);
 
     return Params(
-        symptom_dist, infDistributions, symptomatic_isolation_prob, 
+        symptom_dist, infDistributions, symptomatic_isolation_prob,
         asymptomatic_prob, pos_test_probs, test_delay
         )
 end
@@ -450,14 +450,14 @@ end
 - `params::Params` - Simulation parameters
 - `N::Int` (opt) - Total Population Size
 """
-function initState(I, params::Params; N::Int=1_000_000)
+function initState(I, params::Params; N::Int=1_000_000)::State
     horizon = length(params.Infdistributions)
     if isa(I, Distribution)
         I0 = round.(Int,rand(truncated(I,0,Inf),horizon))
         @assert sum(I0) <= N # Ensure Sampled infected is not greater than total population
     elseif isa(I, Array{Int, 1})
         @assert all(I .>= 0 )
-        @assert sum(I) <= N 
+        @assert sum(I) <= N
         I0 = I
     elseif isa(I, Int)
         I0 = zeros(Int,horizon)
@@ -465,7 +465,7 @@ function initState(I, params::Params; N::Int=1_000_000)
     else
         throw(DomainError(I, "`I` must be distribution, array of integers, or single integer"))
     end
-    
+
     S0 = N - sum(I0)
     R0 = 0
     tests = zeros(Int, params.test_delay+1, horizon)
@@ -480,13 +480,13 @@ Completely Random Initial State
 - `params::Params` - Simulation parameters
 - `N::Int` (opt) - Total Population Size
 """
-function initState(params::Params; N::Int=1_000_000)
+function initState(params::Params; N::Int=1_000_000)::State
     horizon = length(params.Infdistributions)
-    
+
     sus = rand()
     inf = rand(horizon)./horizon
     rec = rand()
-    
+
     total = sus + sum(inf) + rec
     S = round(Int, sus*N/total)
     I = round.(Int, inf.*N./total)
@@ -498,10 +498,10 @@ function initState(params::Params; N::Int=1_000_000)
         S += leftover
     elseif 0 <= R+leftover <= N
         R += leftover
-    else 
+    else
         throw(BoundsError("RNG Bounds Error, Run Again"))
     end
-    
+
     tests = zeros(Int, params.test_delay+1, horizon)
 
     return State(S, I, R, N, tests)

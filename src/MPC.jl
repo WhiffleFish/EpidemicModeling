@@ -3,7 +3,7 @@ using ParameterJuMP
 using Ipopt
 import Plots.plot
 import Plots.plot!
-# GLPK does not work with '==' constraints 
+# GLPK does not work with '==' constraints
 
 # List of solvers - https://jump.dev/JuMP.jl/v0.21.1/installation/#Installation-Guide-1
 
@@ -15,7 +15,7 @@ Instantiate MPC - how??
 input State to MPC
 
 Output
-- full::Bool 
+- full::Bool
     - true: output 2d array [S, I, R, control over PredHorizon]
     - false: output control vector of length ControlHorizon
 =#
@@ -24,7 +24,7 @@ abstract type MPC end
 
 """
 # Arguments
-`model::JuMP.Model` 
+`model::JuMP.Model`
 `PredHorizon::Int64` - Prediction Horizon
 `ControlHorizon::Int64` - Control Horizon
 `InfWeight::Float64` - Infection Weight: How much to penalize infectious population proportion over prediction horizon
@@ -33,10 +33,10 @@ abstract type MPC end
 `IC::Vector{ParameterRef}` - ParameterJuMP parameter initial conditions for MPC: `[S0, I0, R0]`
 """
 struct SIR_MPC <: MPC
-    model::JuMP.Model 
+    model::JuMP.Model
     PredHorizon::Int64
-    ControlHorizon::Int64 
-    InfWeight::Float64  
+    ControlHorizon::Int64
+    InfWeight::Float64
     TestWeight::Float64
     TestRateWeight::Float64
     IC::Vector{ParameterRef}
@@ -44,7 +44,7 @@ end
 
 """
 # Arguments
-`model::JuMP.Model` 
+`model::JuMP.Model`
 `PredHorizon::Int64` - Prediction Horizon
 `ControlHorizon::Int64` - Control Horizon
 `InfWeight::Float64` - Infection Weight: How much to penalize infectious population proportion over prediction horizon
@@ -74,7 +74,7 @@ end
 - `optimizer=Ipopt.Optimizer` (opt)
 """
 function initSIR_MPC(SIR_params::Vector{Float64}; PredHorizon::Int64 = 20, ControlHorizon::Int64 = 3,
-    InfWeight::Float64 = 30., TestWeight::Float64 = 0.5, TestRateWeight::Float64 = 10., optimizer=Ipopt.Optimizer)
+    InfWeight::Float64 = 30., TestWeight::Float64 = 0.5, TestRateWeight::Float64 = 10., optimizer=Ipopt.Optimizer)::SIR_MPC
 
     α, β, δ = SIR_params
 
@@ -92,20 +92,20 @@ function initSIR_MPC(SIR_params::Vector{Float64}; PredHorizon::Int64 = 20, Contr
         model,
         [i=2:PredHorizon], S[i] == S[i-1] - β*I[i-1]*S[i-1]
     )
-    
+
     JuMP.@constraint(
         model,
         [i=2:PredHorizon], I[i] == I[i-1] + β*I[i-1]*S[i-1] - (α+δ*T[i-1])*I[i-1]
     )
-    
+
     JuMP.@constraint(
         model,
         [i=2:PredHorizon], R[i] == R[i-1] + (α+δ*T[i-1])*I[i-1]
     )
-    
+
     JuMP.@objective( # InfWeight ← 0 : Hard constraint
-        model, Min, 
-        InfWeight*sum(I).^2 + TestWeight*sum(T).^2 + TestRateWeight*sum((T .- circshift(T,1))[2:end].^2) 
+        model, Min,
+        InfWeight*sum(I).^2 + TestWeight*sum(T).^2 + TestRateWeight*sum((T .- circshift(T,1))[2:end].^2)
     )
 
     S0 = add_parameter(model,1.0)
@@ -121,8 +121,8 @@ function initSIR_MPC(SIR_params::Vector{Float64}; PredHorizon::Int64 = 20, Contr
 end
 
 function initSEIR_MPC(SEIR_params::Vector{Float64}; PredHorizon::Int64 = 20, ControlHorizon::Int64 = 3,
-    InfWeight::Float64=20., ExpWeight::Float64=20., TestWeight::Float64=0.5, TestRateWeight::Float64=10., optimizer=Ipopt.Optimizer)
-    
+    InfWeight::Float64=20., ExpWeight::Float64=20., TestWeight::Float64=0.5, TestRateWeight::Float64=10., optimizer=Ipopt.Optimizer)::SEIR_MPC
+
     α, β, γ, δ, ϵ = SEIR_params
 
     model = ModelWithParams(optimizer)
@@ -161,10 +161,10 @@ function initSEIR_MPC(SEIR_params::Vector{Float64}; PredHorizon::Int64 = 20, Con
     )
 
     JuMP.@objective(
-        model, Min, 
-        InfWeight*sum(I).^2 + ExpWeight*sum(E).^2 +TestWeight*sum(T).^2 + TestRateWeight*sum((T .- circshift(T,1))[2:end].^2) 
+        model, Min,
+        InfWeight*sum(I).^2 + ExpWeight*sum(E).^2 +TestWeight*sum(T).^2 + TestRateWeight*sum((T .- circshift(T,1))[2:end].^2)
     )
-    
+
     S0 = add_parameter(model,1.0)
     E0 = add_parameter(model,0.0)
     I0 = add_parameter(model,0.0)
@@ -195,24 +195,24 @@ function SetIC!(mpc::MPC, state::State)
 end
 
 function OptimalAction(mpc::SIR_MPC, state::State)
-    
+
     SetIC!(mpc, state)
 
     model = mpc.model
-    
+
     optimize!(model)
-    
+
     return getvalue.(model[:T])[1:mpc.ControlHorizon]
 end
 
 function OptimalAction(mpc::SEIR_MPC, state::State)
-    
+
     SetIC!(mpc, state)
-    
+
     model = mpc.model
-    
+
     optimize!(model)
-    
+
     return getvalue.(model[:T])[1:mpc.ControlHorizon]
 end
 
@@ -225,7 +225,7 @@ end
 
 function plot(mpc::MPC, var::Symbol)
     yLabelDict = Dict(
-        :S=>"Susceptible Proportion", :E=>"Exposed Proportion", 
+        :S=>"Susceptible Proportion", :E=>"Exposed Proportion",
         :I=>"Infected Proportion", :R=>"Recovered Proportion", :T=>"Testing Strength"
     ) # "testing strength" is ambiguous -> change
     if var ∉ keys(yLabelDict)
@@ -239,7 +239,7 @@ end
 
 function plot!(mpc::MPC, var::Symbol)
     yLabelDict = Dict(
-        :S=>"Susceptible Proportion", :E=>"Exposed Proportion", 
+        :S=>"Susceptible Proportion", :E=>"Exposed Proportion",
         :I=>"Infected Proportion", :R=>"Recovered Proportion", :T=>"Testing Strength"
     ) # "testing strength" is ambiguous -> change
     if var ∉ keys(yLabelDict)

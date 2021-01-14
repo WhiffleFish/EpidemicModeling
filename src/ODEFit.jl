@@ -64,7 +64,7 @@ Get initial SIR state (in proportions of pop) of given Simulation History
 # Arguments
 - simHist::simHist
 """
-function initSIR(simHist::SimHist)
+function initSIR(simHist::SimHist)::Vector{Float64}
     Array(simHist)[:, 1]./simHist.N
 end
 
@@ -73,7 +73,7 @@ Get initial SIR state (in proportions of pop) of given State
 # Arguments
 - state::State
 """
-function initSIR(state::State)
+function initSIR(state::State)::Vector{Float64}
     Array(state)./simHist.N
 end
 
@@ -82,7 +82,7 @@ Get initial SEIR state (in proportions of pop) of given Simulation History
 # Arguments
 - simHist::simHist
 """
-function initSEIR(simHist::SimHist)
+function initSEIR(simHist::SimHist)::Vector{Float64}
     [simHist.sus[1], 0, simHist.inf[1], simHist.rec[1]]./simHist.N
 end
 
@@ -91,7 +91,7 @@ Get initial SEIR state (in proportions of pop) of given State
 # Arguments
 - state::State
 """
-function initSEIR(state::State)
+function initSEIR(state::State)::Vector{Float64}
     [state.S, 0.0, state.I, state.R]./state.N
 end
 
@@ -101,7 +101,7 @@ end
 - `x` - Output Data
 - `ref_data` - Reference Data
 """
-function SIR_loss(x, ref_data)
+function SIR_loss(x, ref_data)::Float64
     sum(abs2, Array(x) .- ref_data)
 end
 
@@ -111,7 +111,7 @@ end
 - `x` - Output Data
 - `ref_data` - Reference Data
 """
-function SEIR_loss(x, ref_data)
+function SEIR_loss(x, ref_data)::Float64
     L = zeros(3,size(ref_data)[2])
     L[1,:] = x[1,:]
     L[2,:] = sum(x[2:3,:], dims=1)[1,:]
@@ -123,7 +123,7 @@ end
 """
 # Arguments
 - `kind::Symbol`
-- `simHist::SimHist` 
+- `simHist::SimHist`
 """
 function FitModel(kind::Symbol, simHist::SimHist)
     ref = Array(simHist)./simHist.N
@@ -145,7 +145,7 @@ function FitModel(kind::Symbol, simHist::SimHist)
     end
 
     result = optimize(objective, p, NelderMead())
-    
+
     return result, Optim.minimizer(result)
 end
 
@@ -157,7 +157,7 @@ end
 
 
 """
-Fit SIR or SEIR model parameters to an ensemble of stochastic simulations 
+Fit SIR or SEIR model parameters to an ensemble of stochastic simulations
 # Arguments
 - `kind::Symbol` - Type of differential model to fit (`:SIR` or `:SEIR`)
 - `T::Int` - Simulation Time (days)
@@ -179,12 +179,12 @@ function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Para
         LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
 
         result = optimize(
-            x->SIR_param_loss(x,LossCalcParams), 
-            first_guess, 
+            x->SIR_param_loss(x,LossCalcParams),
+            first_guess,
             NelderMead(),
             Optim.Options(show_trace=show_trace, show_every=50)
         )
-    
+
     elseif kind == :SEIR
         first_guess = [0.1, 0.1, 0.1]
         initial_conditions = [initSEIR(sim) for sim in sims]
@@ -192,8 +192,8 @@ function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Para
         LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
 
         result = optimize(
-            x->SEIR_param_loss(x,LossCalcParams), 
-            first_guess, 
+            x->SEIR_param_loss(x,LossCalcParams),
+            first_guess,
             NelderMead(),
             Optim.Options(show_trace=show_trace, show_every=50)
         )
@@ -207,7 +207,7 @@ end
 
 
 """
-Fit SIR or SEIR model parameters to an ensemble of stochastic simulations 
+Fit SIR or SEIR model parameters to an ensemble of stochastic simulations
 # Arguments
 - `kind::Symbol` - Type of differential model to fit (`:SIR` or `:SEIR`)
 - `T::Int` - Simulation Time (days)
@@ -216,7 +216,7 @@ Fit SIR or SEIR model parameters to an ensemble of stochastic simulations
 - `show_trace::Bool = false` (opt) - print live optimization status
 """
 function FitRandControlledEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Params; show_trace::Bool=false)
-    
+
     actions = rand(trajectories) .|> Action
 
     sims = SimulateEnsemble(T, trajectories, params, actions, N=1_000_000)
@@ -230,12 +230,12 @@ function FitRandControlledEnsemble(kind::Symbol, T::Int, trajectories::Int64, pa
         LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
 
         result = optimize(
-            x->SIR_CTRL_param_loss(x, LossCalcParams), 
-            first_guess, 
+            x->SIR_CTRL_param_loss(x, LossCalcParams),
+            first_guess,
             NelderMead(),
             Optim.Options(show_trace=show_trace, show_every=50)
         )
-    
+
     elseif kind == :SEIR
         first_guess = [0.1, 0.1, 0.1, 1., 1.]
         initial_conditions = [vcat(initSEIR(sim),actions[i].testing_prop) for (i,sim) in enumerate(sims)]
@@ -243,8 +243,8 @@ function FitRandControlledEnsemble(kind::Symbol, T::Int, trajectories::Int64, pa
         LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
 
         result = optimize(
-            x->SEIR_CTRL_param_loss(x, LossCalcParams), 
-            first_guess, 
+            x->SEIR_CTRL_param_loss(x, LossCalcParams),
+            first_guess,
             NelderMead(),
             Optim.Options(show_trace=show_trace, show_every=50)
         )
@@ -262,7 +262,7 @@ end
 - `p::Vector{Float64}` - Vector of parameters ``\\alpha, \\beta`` for SIR ODE
 - `LossCalcParams::Dict`
 """
-function SIR_param_loss(p::Vector{Float64}, LossCalcParams::Dict)
+function SIR_param_loss(p::Vector{Float64}, LossCalcParams::Dict)::Float64
     loss = 0.
     for i in 1:length(LossCalcParams[:IC])
         data = Array(SolveODE(:SIR, LossCalcParams[:IC][i],LossCalcParams[:T], p))
@@ -270,7 +270,7 @@ function SIR_param_loss(p::Vector{Float64}, LossCalcParams::Dict)
     end
 
     # Scale loss by number of MC sims s.t. loss calculated from different number of MC sims is comparable
-    return loss/length(LossCalcParams[:IC]) 
+    return loss/length(LossCalcParams[:IC])
 end
 
 """
@@ -278,30 +278,13 @@ end
 - `p::Vector{Float64}` - Vector of parameters ``\\alpha, \\beta`` for SIR ODE
 - `LossCalcParams::Dict`
 """
-function SIR_CTRL_param_loss(p::Vector{Float64}, LossCalcParams::Dict)
+function SIR_CTRL_param_loss(p::Vector{Float64}, LossCalcParams::Dict)::Float64
     loss = 0.
     for i in 1:length(LossCalcParams[:IC])
         data = Array(SolveODE(:SIR_CTRL, LossCalcParams[:IC][i], LossCalcParams[:T], p))
         loss += sum(abs2, data[1:3,:] .- LossCalcParams[:ref][:,:,i])
     end
 
-    # Scale loss by number of MC sims s.t. loss calculated from different number of MC sims is comparable
-    return loss/length(LossCalcParams[:IC]) 
-end
-
-"""
-# Arguments
-- `p::Vector{Float64}` - Vector of parameters ``\\alpha, \\beta, \\gamma `` for SEIR ODE
-- `LossCalcParams::Dict`
-"""
-function SEIR_param_loss(p::Vector{Float64}, LossCalcParams::Dict)
-    loss = 0.
-    for i in 1:length(LossCalcParams[:IC])
-        data = Array(SolveODE(:SEIR,LossCalcParams[:IC][i],LossCalcParams[:T], p))
-        loss += sum(abs2, data[[1,4],:] .- LossCalcParams[:ref][[1,3],:,i] )
-        loss += sum(abs2, data[2,:] + data[3,:] .- LossCalcParams[:ref][2,:,i] ) 
-    end
-    
     # Scale loss by number of MC sims s.t. loss calculated from different number of MC sims is comparable
     return loss/length(LossCalcParams[:IC])
 end
@@ -311,14 +294,31 @@ end
 - `p::Vector{Float64}` - Vector of parameters ``\\alpha, \\beta, \\gamma `` for SEIR ODE
 - `LossCalcParams::Dict`
 """
-function SEIR_CTRL_param_loss(p::Vector{Float64}, LossCalcParams::Dict)
+function SEIR_param_loss(p::Vector{Float64}, LossCalcParams::Dict)::Float64
+    loss = 0.
+    for i in 1:length(LossCalcParams[:IC])
+        data = Array(SolveODE(:SEIR,LossCalcParams[:IC][i],LossCalcParams[:T], p))
+        loss += sum(abs2, data[[1,4],:] .- LossCalcParams[:ref][[1,3],:,i] )
+        loss += sum(abs2, data[2,:] + data[3,:] .- LossCalcParams[:ref][2,:,i] )
+    end
+
+    # Scale loss by number of MC sims s.t. loss calculated from different number of MC sims is comparable
+    return loss/length(LossCalcParams[:IC])
+end
+
+"""
+# Arguments
+- `p::Vector{Float64}` - Vector of parameters ``\\alpha, \\beta, \\gamma `` for SEIR ODE
+- `LossCalcParams::Dict`
+"""
+function SEIR_CTRL_param_loss(p::Vector{Float64}, LossCalcParams::Dict)::Float64
     loss = 0.
     for i in 1:length(LossCalcParams[:IC])
         data = Array(SolveODE(:SEIR_CTRL, LossCalcParams[:IC][i], LossCalcParams[:T], p))
         loss += sum(abs2, data[[1,4],:] .- LossCalcParams[:ref][[1,3],:,i] )
-        loss += sum(abs2, data[2,:] + data[3,:] .- LossCalcParams[:ref][2,:,i] ) 
+        loss += sum(abs2, data[2,:] + data[3,:] .- LossCalcParams[:ref][2,:,i] )
     end
-    
+
     # Scale loss by number of MC sims s.t. loss calculated from different number of MC sims is comparable
     return loss/length(LossCalcParams[:IC])
 end
@@ -329,9 +329,9 @@ Convert controlled/uncontrolled SIR/SEIR models to pure SIR arrays
 # Arguments
 - `sol` - Output of DifferentialEquations.jl solver
 """
-function toSIR(sol)
+function toSIR(sol)::Array{Float64,2}
     syms = sol.prob.f.syms
-    
+
     if syms == [:S, :I, :R]
         return Array(sol)
 
