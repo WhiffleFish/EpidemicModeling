@@ -18,7 +18,7 @@ TestActions  = [Action(x) for x in 0:0.1:1]
 function test_sim(state::State, action::Action, param::Params; T=100)
     simHist = Simulate(T, state, param, action)
     plt = plotHist(simHist, kind=:stack, order="IRS",prop=true)
-    # display(plt)
+    display(plt)
     @test all(0 .<= Array(simHist) .<= simHist.N)
     @test all(0 .<= simHist.incident .<= simHist.N)
 end

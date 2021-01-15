@@ -1,6 +1,7 @@
 using JuMP
 using ParameterJuMP
 using Ipopt
+using ProgressBars
 import Plots.plot
 import Plots.plot!
 # GLPK does not work with '==' constraints
@@ -66,6 +67,7 @@ end
 
 """
 - `SIR_params::Vector{Float64}`
+- `callback::Bool=true` (opt)
 - `PredHorizon::Int64 = 20` (opt)
 - `ControlHorizon::Int64 = 3` (opt)
 - `InfWeight::Float64 = 30.` (opt)
@@ -73,12 +75,15 @@ end
 - `TestRateWeight::Float64 = 10.` (opt)
 - `optimizer=Ipopt.Optimizer` (opt)
 """
-function initSIR_MPC(SIR_params::Vector{Float64}; PredHorizon::Int64 = 20, ControlHorizon::Int64 = 3,
+function initSIR_MPC(SIR_params::Vector{Float64}; callback::Bool=true, PredHorizon::Int64 = 20, ControlHorizon::Int64 = 3,
     InfWeight::Float64 = 30., TestWeight::Float64 = 0.5, TestRateWeight::Float64 = 10., optimizer=Ipopt.Optimizer)::SIR_MPC
 
     α, β, δ = SIR_params
-
-    model = ModelWithParams(optimizer)
+    if callback
+        model = ModelWithParams(optimizer)
+    else
+        model = ModelWithParams(optimizer_with_attributes(optimizer, "print_level"=>0))
+    end
 
     JuMP.@variables model begin
         S[1:PredHorizon]
@@ -120,12 +125,27 @@ function initSIR_MPC(SIR_params::Vector{Float64}; PredHorizon::Int64 = 20, Contr
     return SIR_MPC(model, PredHorizon, ControlHorizon, InfWeight, TestRateWeight, TestRateWeight, [S0,I0,R0])
 end
 
-function initSEIR_MPC(SEIR_params::Vector{Float64}; PredHorizon::Int64 = 20, ControlHorizon::Int64 = 3,
+
+"""
+- `SEIR_params::Vector{Float64}`
+- `callback::Bool=true` (opt)
+- `PredHorizon::Int64 = 20` (opt)
+- `ControlHorizon::Int64 = 3` (opt)
+- `InfWeight::Float64 = 30.` (opt)
+- `TestWeight::Float64 = 0.5` (opt)
+- `TestRateWeight::Float64 = 10.` (opt)
+- `optimizer=Ipopt.Optimizer` (opt)
+"""
+function initSEIR_MPC(SEIR_params::Vector{Float64}; callback::Bool=true, PredHorizon::Int64 = 20, ControlHorizon::Int64 = 3,
     InfWeight::Float64=20., ExpWeight::Float64=20., TestWeight::Float64=0.5, TestRateWeight::Float64=10., optimizer=Ipopt.Optimizer)::SEIR_MPC
 
     α, β, γ, δ, ϵ = SEIR_params
 
-    model = ModelWithParams(optimizer)
+    if callback
+        model = ModelWithParams(optimizer)
+    else
+        model = ModelWithParams(optimizer_with_attributes(optimizer, "print_level"=>0))
+    end
 
     dS(S,E,I,R,T) = -β*I*S
     dE(S,E,I,R,T) = β*I*S - (γ+ϵ*T)*E
@@ -202,7 +222,7 @@ function OptimalAction(mpc::SIR_MPC, state::State)
 
     optimize!(model)
 
-    return getvalue.(model[:T])[1:mpc.ControlHorizon]
+    return JuMP.value.(model[:T])[1:mpc.ControlHorizon]
 end
 
 function OptimalAction(mpc::SEIR_MPC, state::State)
@@ -213,9 +233,38 @@ function OptimalAction(mpc::SEIR_MPC, state::State)
 
     optimize!(model)
 
-    return getvalue.(model[:T])[1:mpc.ControlHorizon]
+    return JuMP.value.(model[:T])[1:mpc.ControlHorizon]
 end
 
+function MPCSimulate(T::Int, state::State, params::Params, mpc::MPC)
+    susHist = zeros(Int,T)
+    infHist = zeros(Int,T)
+    recHist = zeros(Int,T)
+    incidentHist = zeros(Int,T)
+    testHist = zeros(Int,T)
+    actionHist = zeros(Float64,T)
+
+    actions = nothing
+    for day in ProgressBar(1:T)
+
+        if ((day-1) % mpc.ControlHorizon) == 0
+            actions = OptimalAction(mpc, state) |> reverse
+        end
+
+        action = Action(pop!(actions))
+
+        susHist[day] = state.S
+        infHist[day] = sum(state.I)
+        recHist[day] = state.R
+        actionHist[day] = action.testing_prop
+
+        state, new_infections, pos_tests = SimStep(state, params, action, state_only=false)
+        incidentHist[day] = new_infections
+        testHist[day] = sum(pos_tests)
+    end
+
+    return SimHist(susHist, infHist, recHist, state.N, T, incidentHist, testHist), actionHist
+end
 
 
 # ---------------------------------------------------------------------------- #
@@ -232,7 +281,7 @@ function plot(mpc::MPC, var::Symbol)
         error("Available var names are :S,:E,:I,:R,:T")
     end
 
-    plot(getvalue.(mpc.model[var]), label="")
+    plot(JuMP.value.(mpc.model[var]), label="")
     xlabel!("Time (days)")
     ylabel!(yLabelDict[var])
 end
@@ -246,5 +295,5 @@ function plot!(mpc::MPC, var::Symbol)
         error("Available var names are :S,:E,:I,:R,:T")
     end
 
-    plot!(getvalue.(mpc.model[var]), label=yLabelDict[var])
+    plot!(JuMP.value.(mpc.model[var]), label=yLabelDict[var])
 end
