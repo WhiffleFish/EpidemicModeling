@@ -13,7 +13,7 @@ TestParams = [
     initParams(symptomatic_isolation_prob=0.95, asymptomatic_prob=0.65,LOD=3)
 ]
 
-TestActions  = [Action(x) for x in 0:0.1:1]
+TestActions  = [Action(x) for x in 0:0.2:1]
 
 function test_sim(state::State, action::Action, param::Params; T=100)
     simHist = Simulate(T, state, param, action)

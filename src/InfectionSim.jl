@@ -153,11 +153,18 @@ Simulation History
     pos_test::Vector{Int} = nothing # By default do not record testing
 end
 
+Base.copy(state::State) = State([getfield(state,name) for name ∈ fieldnames(State)]...)
 
+"""
+Convert `simHist` struct to 2-dimentional array - Collapse infected array to sum
+"""
 function Array(simHist::SimHist)::Array{Int64,2}
     hcat(simHist.sus, simHist.inf, simHist.rec) |> transpose |> Array
 end
 
+"""
+Convert `State` struct to Vector - Collapse infected array to sum
+"""
 function Array(state::State)::Vector{Int64}
     [state.S, sum(state.I), state.R]
 end
@@ -211,7 +218,6 @@ end
 """
 function PositiveTests(state::State, params::Params, action::Action)::Vector{Int64}
     @assert 0 <= action.testing_prop <= 1
-    # TODO: Don't test the same people twice!
     pos_tests = zeros(Int,length(params.pos_test_probs))
 
     for (i,inf) in enumerate(state.I)
@@ -235,6 +241,8 @@ infectious population.
 - `action::Action` - Current Sim Action
 - `ret_tests::Bool=false` (opt) - return both new state and positive tests
 """
+# Only record number that have taken the test, the number that return postive is
+# Binomial dist, such that s' is stochastic on s.
 function UpdateIsolations(state::State, params::Params, action::Action; ret_tests::Bool=false)
 
     sympt = SymptomaticIsolation(state.I, params) # Number of people isolating due to symptoms
@@ -356,6 +364,60 @@ function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, actions
     [Simulate(T, initState(params, N=N), params, actions[i]) for i in 1:trajectories]
 end
 
+"""
+Provided some state initial condition, simulate resulting epidemic and return vector of all intermediary states
+- `T::Int`
+- `state::State`
+- `params::Params`
+- `action::Action` (opt)
+"""
+function GenSimStates(T::Int, state::State, params::Params; action::Action=Action(0.0))::Vector{State}
+    s = copy(state)
+    [copy(SimStep(s, params, action, state_only=true)) for day in 1:T]
+end
+
+"""
+Provided some state initial conditions, simulate resulting epidemic and return vector of all intermediary states
+- `T::Int`
+- `states::Vector{State}`
+- `params::Params`
+- `action::Action` (opt)
+"""
+function GenSimStates(T::Int, states::Vector{State}, params::Params; action::Action=Action(0.0))::Vector{State}
+    svec = Array{State,1}(undef, 0)
+    for state in states
+        for day in 1:T
+            push!(svec, copy(SimStep(state, params, action, state_only=true)))
+        end
+    end
+    return svec
+end
+
+function FullArr(state::State)::Vector{Float64}
+    vcat(state.S,state.I,state.R)./state.N
+end
+
+function FullArrToSIR(arr::Array{Float64,2})::Array{Float64,2}
+    hcat(arr[1,:], reshape(sum(arr[2:15,:],dims=1),size(arr,2)), arr[16,:])'
+end
+
+"""
+Provided some state initial conditions, simulate resulting epidemic and return vector of all intermediary states
+- `T::Int`
+- `state::State`
+- `params::Params`
+- `action::Action` (opt)
+"""
+function SimulateFull(T::Int, state::State, params::Params; action::Action=Action(0.0))::Array{Float64,2}
+    s = copy(state)
+    StateArr = Array{Float64,2}(undef,16,T)
+    StateArr[:,1] = FullArr(s)
+    for day in 2:T
+        StateArr[:,day] = FullArr(SimStep(s, params, action, state_only=true))
+    end
+    return StateArr
+end
+
 
 """
 Convert Simulation SimulateEnsemble output to 3D Array
@@ -471,35 +533,70 @@ function initState(I, params::Params; N::Int=1_000_000)::State
     tests = zeros(Int, params.test_delay+1, horizon)
 
     return State(S0, I0, R0, N, tests)
-
 end
 
 """
-Completely Random Initial State
+# Arguments
+- `I`: Initial infections
+    - `I::Distribution` - Sample all elements in Infections array from given distribution
+    - `I::Array{Int,1}` - Take given array as initial infections array
+    - `I::Int` - Take first element of infections array (infection age 0) as given integer
+- `params::Params` - Simulation parameters
+- `N::Int` (opt) - Total Population Size
+"""
+function initState(I, params::Params, rng::AbstractRNG; N::Int=1_000_000)::State
+    horizon = length(params.Infdistributions)
+    if isa(I, Distribution)
+        I0 = round.(Int,rand(rng, truncated(I,0,Inf),horizon))
+        @assert sum(I0) <= N # Ensure Sampled infected is not greater than total population
+    elseif isa(I, Array{Int, 1})
+        @assert all(I .>= 0 )
+        @assert sum(I) <= N
+        I0 = I
+    elseif isa(I, Int)
+        I0 = zeros(Int,horizon)
+        I0[1] = I
+    else
+        throw(DomainError(I, "`I` must be distribution, array of integers, or single integer"))
+    end
+
+    S0 = N - sum(I0)
+    R0 = 0
+    tests = zeros(Int, params.test_delay+1, horizon)
+
+    return State(S0, I0, R0, N, tests)
+end
+
+function simplex_sample(N::Int,m::Float64)
+    v = rand(N-1)*m
+    push!(v, 0, m)
+    sort!(v)
+    return (v - circshift(v,1))[2:end]
+end
+
+
+"""
+Random Initial State using Bayesian Bootstrap / Simplex sampling
 # Arguments
 - `params::Params` - Simulation parameters
 - `N::Int` (opt) - Total Population Size
 """
 function initState(params::Params; N::Int=1_000_000)::State
+
+    S, inf, R = round.(Int,simplex_sample(3, Float64(N)))
+
     horizon = length(params.Infdistributions)
 
-    sus = rand()
-    inf = rand(horizon)./horizon
-    rec = rand()
-
-    total = sus + sum(inf) + rec
-    S = round(Int, sus*N/total)
-    I = round.(Int, inf.*N./total)
-    R = round(Int, rec*N/total)
+    I = round.(Int,simplex_sample(horizon, Float64(inf)))
 
     leftover = N - (S + sum(I) + R)
-
-    if 0 <= S+leftover <= N
+    max_idx = argmax([S, sum(I), R])
+    if max_idx == 1
         S += leftover
-    elseif 0 <= R+leftover <= N
-        R += leftover
+    elseif max_idx == 2
+        I[end] += leftover
     else
-        throw(BoundsError("RNG Bounds Error, Run Again"))
+        R += leftover
     end
 
     tests = zeros(Int, params.test_delay+1, horizon)
