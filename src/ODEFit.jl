@@ -1,4 +1,5 @@
-using DifferentialEquations, DiffEqParamEstim, Optim, LossFunctions
+using DifferentialEquations, DiffEqParamEstim, Optim
+# using LossFunctions
 include("InfectionSim.jl")
 
 SIR_ODE = @ode_def SIR begin

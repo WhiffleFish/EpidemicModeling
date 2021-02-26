@@ -9,39 +9,42 @@ struct TrainingData
     num_batches::Int
     batches::Array{Float64,4}
     actions::Array{Float64,2}
+    N::Int
 end
 
-function TrainingData(T::Int, params::Params, batch_size::Int, num_batches::Int; full::Bool=false)::TrainingData
+function TrainingData(T::Int, params::Params, batch_size::Int, num_batches::Int; full::Bool=false, N=1_000_000)::TrainingData
     ICs = GetICs(params)
     tspan = (1. , Float64(T))
     times = 1.:Float64(T)
 
     if full
-        batches, actionArr = GetFullBatches(ICs, T, batch_size, num_batches)
+        batches, actionArr = GetFullBatches(ICs, params, T, batch_size, num_batches)
     else
-        batches, actionArr = GetBatches(ICs, T, batch_size, num_batches)
+        batches, actionArr = GetBatches(ICs, params, T, batch_size, num_batches)
     end
 
-    return TrainingData(T, batch_size, num_batches, batches, actionArr)
+    return TrainingData(T, batch_size, num_batches, batches, actionArr, N)
 end
 
 
-function GetICs(params::Params)::Vector{State}
-    dists = repeat([Normal(1_000,500), Normal(10_000,5_000), Normal(50_000,10_000)],4)
-
-    ICs = GenSimStates(50, [initState(dists[i],params) for i in eachindex(dists)], params)
-
-    dist = zeros(Float64,3,length(ICs))
-    for (i,state) in enumerate(ICs)
-        dist[1,i] = state.S/1_000_000
-        dist[2,i] = sum(state.I)/1_000_000
-        dist[3,i] = state.R/1_000_000
-    end
-
-    indices = sort(rand(findall(<=(0.05), dist[2,:]),100)) |> unique
-
-    deleteat!(ICs,indices)
-    return ICs
+function GetICs(params::Params,N=1_000)::Vector{State}
+    #
+    # dists = repeat([Normal(1_000,500), Normal(10_000,5_000), Normal(50_000,10_000)],4)
+    #
+    # ICs = GenSimStates(50, [initState(dists[i],params) for i in eachindex(dists)], params)
+    #
+    # dist = zeros(Float64,3,length(ICs))
+    # for (i,state) in enumerate(ICs)
+    #     dist[1,i] = state.S/1_000_000
+    #     dist[2,i] = sum(state.I)/1_000_000
+    #     dist[3,i] = state.R/1_000_000
+    # end
+    #
+    # indices = sort(rand(findall(<=(0.05), dist[2,:]),100)) |> unique
+    #
+    # deleteat!(ICs,indices)
+    # return ICs
+    return [initState(params) for _ in 1:N]
 end
 
 
@@ -53,7 +56,7 @@ Returns batches of full simulated SIR state vectors(16x1) and their respective a
 - `batch_size::Int`
 - `num_batches::Int`
 """
-function GetFullBatches(ICs::Vector{State}, T::Int, batch_size::Int, num_batches::Int; action_dist=Beta(1,2))::Tuple{Array{Float64,4},Array{Float64,2}}
+function GetFullBatches(ICs::Vector{State}, param::Params, T::Int, batch_size::Int, num_batches::Int; action_dist=Beta(1,2))::Tuple{Array{Float64,4},Array{Float64,2}}
     tspan = (1.,Float64(T))
     times = 1.:Float64(T)
 
@@ -62,7 +65,7 @@ function GetFullBatches(ICs::Vector{State}, T::Int, batch_size::Int, num_batches
     ActionArr = rand(Beta(1,2),num_batches, batch_size) # For favoring lower actions
 
     # batches = (batch, sim, [S,I,R], day)
-    batches = Array{Float64,4}(undef, num_batches, batch_size, 16, T)# Well shit this is going to be 4 dimensional
+    batches = Array{Float64,4}(undef, num_batches, batch_size, 16, T)
     for i in 1:num_batches
         for j in 1:batch_size
             batches[i,j,:,:] = SimulateFull(T, copy(ICbatches[i][j]), param, action=Action(ActionArr[i,j]))
@@ -80,7 +83,7 @@ Returns batches of simulated SIR state vectors(3x1) and their respective actions
 - `batch_size::Int`
 - `num_batches::Int`
 """
-function GetBatches(ICs::Vector{State}, T::Int, batch_size::Int, num_batches::Int; action_dist=Beta(1,2))::Tuple{Array{Float64,4},Array{Float64,2}}
+function GetBatches(ICs::Vector{State}, param::Params, T::Int, batch_size::Int, num_batches::Int; action_dist=Beta(1,2))::Tuple{Array{Float64,4},Array{Float64,2}}
     tspan = (1., Float64(T))
     times = 1.:Float64(T)
 
@@ -91,7 +94,7 @@ function GetBatches(ICs::Vector{State}, T::Int, batch_size::Int, num_batches::In
     batches = Array{Float64,4}(undef, num_batches, batch_size, 3, T)
     for i in 1:num_batches
         for j in 1:batch_size
-            batches[i,j,:,:] = Array(Simulate(T, copy(ICbatches[i][j]), param, Action(ActionArr[i,j])))
+            batches[i,j,:,:] .= Array(Simulate(T, copy(ICbatches[i][j]), param, Action(ActionArr[i,j])))./param.N
         end
     end
     return (batches, ActionArr)
@@ -108,7 +111,7 @@ end
 - `actions::Array{Float64,2}`
 """
 function GetFluxData(batches::Array{Float64,4}, actions::Array{Float64,2})::Vector{Tuple{Array{Float64,3},Vector{Float64}}}
-    [(batches[i,:,:,:],ActionArr[i,:]) for i in 1:num_batches]
+    [(batches[i,:,:,:],actions[i,:]) for i in 1:num_batches]
 end
 
 function GetFluxData(data::TrainingData)::Vector{Tuple{Array{Float64,3},Vector{Float64}}}
@@ -134,7 +137,7 @@ function NODELoss(NODE::DiffEqFlux.NeuralDELayer, batch::Array{Float64,3}, batch
     loss = 0.
     batch_size = size(batch,1)
     for i in 1:batch_size
-        loss += NODELoss(batch[i,:,:],batch_actions[i]) # Pass to 2D NODELoss
+        loss += NODELoss(NODE, batch[i,:,:], batch_actions[i]) # Pass to 2D NODELoss
     end
     return loss/batch_size
 end
@@ -145,7 +148,7 @@ Loss over batch
 function NODELoss(NODE::DiffEqFlux.NeuralDELayer, batch::Array{Float64,3}, batch_actions::Vector{Float64}, batch_size::Int)::Float64
     loss = 0.
     for i in 1:batch_size
-        loss += NODELoss(batch[i,:,:],batch_actions[i]) # Pass to 2D NODELoss
+        loss += NODELoss(NODE, batch[i,:,:], batch_actions[i]) # Pass to 2D NODELoss
     end
     return loss/batch_size
 end
@@ -162,33 +165,33 @@ function NODELoss(NODE::DiffEqFlux.NeuralDELayer, batches::Array{Float64,4}, act
     return loss/num_batches
 end
 
-function NODELoss(NODE::DiffEqFlux.NeuralDELayer, data::TrainingData)
+function NODELoss(NODE::DiffEqFlux.NeuralDELayer, data::TrainingData)::Float64
     loss = 0.
     for i in 1:data.num_batches
-        loss += NODELoss(data.batches[i,:,:,:],data.actions[i,:], data.batch_size) # pass to 3D NODE Loss
+        loss += NODELoss(NODE, data.batches[i,:,:,:],data.actions[i,:], data.batch_size) # pass to 3D NODE Loss
     end
     return loss/num_batches
 end
 
 
 function predict(NODE::DiffEqFlux.NeuralDELayer, u0::Vector{Float64}, action::Action)::Array{Float64,2}
-    NODE(vcat(u0,action.testing_prop)) |> Array
+    NODE(vcat(u0,action.testing_prop))[1:end-1,:]
 end
 
 function predict(NODE::DiffEqFlux.NeuralDELayer, u0::Vector{Float64}, action::Float64)::Array{Float64,2}
-    NODE(vcat(u0,action)) |> Array
+    NODE(vcat(u0,action))[1:end-1,:]
 end
 
 function predict(NODE::DiffEqFlux.NeuralDELayer, state::State, action::Action)::Array{Float64,2}
-    NODE(vcat(Array(state)./state.N,action.testing_prop)) |> Array
+    NODE(vcat(Array(state)./state.N,action.testing_prop))[1:end-1,:]
 end
 
 function predict(NODE::DiffEqFlux.NeuralDELayer, state::State, action::Float64)::Array{Float64,2}
-    NODE(vcat(Array(state)./state.N,action)) |> Array
+    NODE(vcat(Array(state)./state.N,action))[1:end-1,:]
 end
 
 function predict(NODE::DiffEqFlux.NeuralDELayer, u0::Array{Float64})::Array{Float64,2}
-    NODE(u0) |> Array
+    NODE(u0)[1:end-1,:]
 end
 
 function callback(NODE::DiffEqFlux.NeuralDELayer, data::TrainingData)
@@ -199,7 +202,7 @@ function callback(NODE::DiffEqFlux.NeuralDELayer, data::TrainingData)
     display(SquaredError(pred, data.batches[i,j,:,:]))
 
     plt = plot(times, data.batches[i,j,:,:]', labels = ["True S" "True I" "True R"], lc = [:blue :red :green])
-    plot!(times, pred', labels = ["Pred S" "Pred I" "Pred R"], lc = [:blue :red :green], ls=:dash)
+    plot!(plt, times, pred', labels = ["Pred S" "Pred I" "Pred R"], lc = [:blue :red :green], ls=:dash)
     display(plt)
 end
 
@@ -212,7 +215,7 @@ function train!(NODE::DiffEqFlux.NeuralDELayer, epochs::Int, α::Float64, traini
     push!(EpochLosses, NODELoss(NODE, training_data))
 
     for epoch in 1:epochs
-        Flux.train!(NODELoss, ps, data, opt, cb = Flux.throttle(() -> callback(NODE, training_data), cbthrottle))
+        Flux.train!((d,a) -> NODELoss(NODE,d,a), ps, data, opt, cb = Flux.throttle(() -> callback(NODE, training_data), cbthrottle))
         EpochLoss = NODELoss(NODE, training_data)
         push!(EpochLosses, EpochLoss)
         println("Epoch Loss: ", EpochLoss)

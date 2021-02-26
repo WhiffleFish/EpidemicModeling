@@ -129,6 +129,7 @@ end
     asymptomatic_prob::Float64 = 0.0
     pos_test_probs::Array{Float64,1} = zeros(length(Infdistributions)) # Default to no testing
     test_delay::Int = 0
+    N::Int = 1_000_000
 end
 
 
@@ -487,7 +488,7 @@ end
 """
 function initParams(;symptomatic_isolation_prob::Real=1, asymptomatic_prob::Real=0, LOD::Real=6,
     test_delay::Int=0, infections_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/Sample50.csv", sample_size::Int=50,
-    viral_loads_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/raw_viral_load.csv", horizon::Int=14)::Params
+    viral_loads_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/raw_viral_load.csv", horizon::Int=14, N::Int=1_000_000)::Params
 
     df = File(infections_path) |> DataFrame;
     viral_loads = File(viral_loads_path) |> DataFrame;
@@ -498,7 +499,7 @@ function initParams(;symptomatic_isolation_prob::Real=1, asymptomatic_prob::Real
 
     return Params(
         symptom_dist, infDistributions, symptomatic_isolation_prob,
-        asymptomatic_prob, pos_test_probs, test_delay
+        asymptomatic_prob, pos_test_probs, test_delay, N
         )
 end
 
