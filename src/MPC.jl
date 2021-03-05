@@ -80,9 +80,9 @@ function initSIR_MPC(SIR_params::Vector{Float64}; callback::Bool=true, PredHoriz
 
     α, β, δ = SIR_params
     if callback
-        model = ModelWithParams(optimizer)
+        model = JuMP.Model(optimizer)
     else
-        model = ModelWithParams(optimizer_with_attributes(optimizer, "print_level"=>0))
+        model = JuMP.Model(optimizer_with_attributes(optimizer, "print_level"=>0))
     end
 
     JuMP.@variables model begin
@@ -113,9 +113,9 @@ function initSIR_MPC(SIR_params::Vector{Float64}; callback::Bool=true, PredHoriz
         InfWeight*sum(I).^2 + TestWeight*sum(T).^2 + TestRateWeight*sum((T .- circshift(T,1))[2:end].^2)
     )
 
-    S0 = add_parameter(model,1.0)
-    I0 = add_parameter(model,0.0)
-    R0 = add_parameter(model,0.0)
+    S0 = @variable(model,S0 == 1.0, Param())
+    I0 = @variable(model,I0 == 0.0, Param())
+    R0 = @variable(model,R0 == 0.0, Param())
 
     # Initial Conditions
     JuMP.@constraint(model, S[1] == S0)
@@ -142,9 +142,9 @@ function initSEIR_MPC(SEIR_params::Vector{Float64}; callback::Bool=true, PredHor
     α, β, γ, δ, ϵ = SEIR_params
 
     if callback
-        model = ModelWithParams(optimizer)
+        model = JuMP.Model(optimizer)
     else
-        model = ModelWithParams(optimizer_with_attributes(optimizer, "print_level"=>0))
+        model = JuMP.Model(optimizer_with_attributes(optimizer, "print_level"=>0))
     end
 
     dS(S,E,I,R,T) = -β*I*S
@@ -185,10 +185,10 @@ function initSEIR_MPC(SEIR_params::Vector{Float64}; callback::Bool=true, PredHor
         InfWeight*sum(I).^2 + ExpWeight*sum(E).^2 +TestWeight*sum(T).^2 + TestRateWeight*sum((T .- circshift(T,1))[2:end].^2)
     )
 
-    S0 = add_parameter(model,1.0)
-    E0 = add_parameter(model,0.0)
-    I0 = add_parameter(model,0.0)
-    R0 = add_parameter(model,0.0)
+    S0 = @variable(model,S0 == 1.0, Param())
+    E0 = @variable(model,E0 == 0.0, Param())
+    I0 = @variable(model,I0 == 0.0, Param())
+    R0 = @variable(model,R0 == 0.0, Param())
 
     # Initial Conditions
     JuMP.@constraint(model, S[1] == S0)
@@ -202,15 +202,15 @@ end
 function SetIC!(mpc::MPC, state::State)
     if mpc isa SIR_MPC
         S0,I0,R0 = mpc.IC
-        fix(S0, state.S/state.N)
-        fix(I0, sum(state.I)/state.N)
-        fix(R0, state.R/state.N)
+        set_value(S0, state.S/state.N)
+        set_value(I0, sum(state.I)/state.N)
+        set_value(R0, state.R/state.N)
     else
         S0,E0,I0,R0 = mpc.IC
-        fix(S0, state.S/state.N)
-        fix(E0, 0.)
-        fix(I0, sum(state.I)/state.N)
-        fix(R0, state.R/state.N)
+        set_value(S0, state.S/state.N)
+        set_value(E0, 0.)
+        set_value(I0, sum(state.I)/state.N)
+        set_value(R0, state.R/state.N)
     end
 end
 

@@ -27,10 +27,13 @@ state = initState(Normal(10,0), param)
 simHist, actionHist = MPCSimulate(T, state, param, SEIRmpc)
 
 l = @layout [a;b]
-p1 = plot(simHist)
+p1 = plot(simHist.inf./simHist.N, label="")
+ylabel!("Infected Prop")
 title!("MPC Test")
 p2 = plot(actionHist, label="", ylabel="Testing Prop")
-plot(p1, p2, layout=l)
+plt = plot(p1, p2, layout=l)
+xlabel!("Day")
+display(plt)
 
-plot(simHist.inf/simHist.N, label="")
-ylabel!("Infected Proportion")
+# plot(simHist.inf/simHist.N, label="")
+# ylabel!("Infected Proportion")
