@@ -79,6 +79,12 @@ version = "0.16.5"
 [[Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 
+[[BeliefUpdaters]]
+deps = ["POMDPModelTools", "POMDPs", "Random", "Statistics", "StatsBase"]
+git-tree-sha1 = "7d4f9d57116796ae3fc768d195386b0a42b4a58d"
+uuid = "8bb6e9a1-7d73-552c-a44a-e5dc5634aac4"
+version = "0.2.2"
+
 [[BenchmarkTools]]
 deps = ["JSON", "Logging", "Printf", "Statistics", "UUIDs"]
 git-tree-sha1 = "9e62e66db34540a0c919d72172cc2f642ac71260"
@@ -184,6 +190,12 @@ version = "0.12.6"
 git-tree-sha1 = "08c8b6831dc00bfea825826be0bc8336fc369860"
 uuid = "861a8166-3701-5b0c-9a16-15d98fcdc6aa"
 version = "1.0.2"
+
+[[CommonRLInterface]]
+deps = ["MacroTools"]
+git-tree-sha1 = "21de56ebf28c262651e682f7fe614d44623dc087"
+uuid = "d842c3ba-07a1-494f-bbec-f5741b0a3e98"
+version = "0.3.1"
 
 [[CommonSolve]]
 git-tree-sha1 = "68a0743f578349ada8bc911a5cbd5a2ef6ed6d1f"
@@ -1058,6 +1070,18 @@ git-tree-sha1 = "cee5817d06f5e1a9054f3e1bbb50cbabae4cd5a5"
 uuid = "f3bd98c0-eb40-45e2-9eb1-f2763262d755"
 version = "0.1.1"
 
+[[POMDPModelTools]]
+deps = ["CommonRLInterface", "Distributions", "LinearAlgebra", "POMDPLinter", "POMDPs", "Random", "SparseArrays", "Statistics", "Tricks", "UnicodePlots"]
+git-tree-sha1 = "66b2d992c601b018d489ebaccff98b3da74e6935"
+uuid = "08074719-1b2a-587c-a292-00f91cc44415"
+version = "0.3.5"
+
+[[POMDPPolicies]]
+deps = ["BeliefUpdaters", "Distributions", "LinearAlgebra", "POMDPModelTools", "POMDPs", "Parameters", "Random", "SparseArrays", "StatsBase"]
+git-tree-sha1 = "2920bc20706b82cf6c5058da51b1bb5d3c391a27"
+uuid = "182e52fb-cfd0-5e46-8c26-fd0667c990f4"
+version = "0.4.1"
+
 [[POMDPTesting]]
 deps = ["POMDPs", "Random"]
 git-tree-sha1 = "6186037fc901d91703c0aa7ab10c145eeb6d0796"
@@ -1093,6 +1117,12 @@ deps = ["Dates"]
 git-tree-sha1 = "223a825cccef2228f3fdbf2ecc7ca93363059073"
 uuid = "69de0a69-1ddd-5017-9359-2bf0b02dc9f0"
 version = "1.0.16"
+
+[[ParticleFilters]]
+deps = ["POMDPLinter", "POMDPModelTools", "POMDPPolicies", "POMDPs", "Random", "Statistics", "StatsBase"]
+git-tree-sha1 = "9b57537dd413e00c52bc28a58c6f28fae1b70515"
+uuid = "c8b314e2-9260-5cf8-ae76-3be7461ca6d0"
+version = "0.5.2"
 
 [[Pixman_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1523,6 +1553,11 @@ git-tree-sha1 = "8d0d7a3fe2f30d6a7f833a5f19f7c7a5b396eae6"
 uuid = "a2a6695c-b41b-5b7d-aed9-dbfdeacea5d7"
 version = "0.3.0"
 
+[[Tricks]]
+git-tree-sha1 = "8280b6d0096e88b77a84f843fa18620d3b20e052"
+uuid = "410a4b4d-49e4-4fbc-ab6d-cb71b17b3775"
+version = "0.1.4"
+
 [[URIs]]
 git-tree-sha1 = "7855809b88d7b16e9b029afd17880930626f54a2"
 uuid = "5c2747f8-b7ea-4ff2-ba2e-563bfd36b1d4"
@@ -1539,6 +1574,12 @@ version = "1.0.2"
 
 [[Unicode]]
 uuid = "4ec0a83e-493e-50e2-b9ac-8f72acf5a8f5"
+
+[[UnicodePlots]]
+deps = ["Crayons", "Dates", "SparseArrays", "StatsBase"]
+git-tree-sha1 = "1a63e6eea76b291378ff9f95801f8b6d96213208"
+uuid = "b8865327-cd53-5732-bb35-84acbb429228"
+version = "1.3.0"
 
 [[Unitful]]
 deps = ["ConstructionBase", "LinearAlgebra", "Random"]

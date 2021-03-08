@@ -112,6 +112,23 @@ mutable struct Action
     testing_prop::Float64
 end
 
+abstract type SolverInterface end
+
+struct ContinuousSolverInterface <: SolverInterface
+    actions::Vector{Action}
+    observation::Function
+    gen::Function
+end
+
+struct DiscreteSolverInterface <: SolverInterface
+    actions::Vector{Action}
+    observation::Function
+    gen::Function
+    c::Float64
+    n_obs::Int
+end
+
+
 
 """
 # Arguments
@@ -121,15 +138,98 @@ end
 - `asymptomatic_prob::Real = 0` - Probability that an infected individual displays no symptoms
 - `pos_test_probs::Array{Float64,1} = zeros(length(Infdistributions))` - Probability of testing positive by exceeding test LOD as a function of infection age ``\\tau``(Default to no testing)
 - `test_delay::Int = 0` - Delay between test being administered and received by subject (days)
+- `N::Int=1_000_000` - Total Population
+- `discount::Float64=0.95` - POMDP discount factor
+- `interface::SolverInterface` - Used for discrete/continuous observations/gen
 """
-@with_kw mutable struct Params <: POMDP{State, Action, Int64} # state::State, action::Action, observation::Int64 - number of pos tests
+@with_kw struct Params <: POMDP{State, Action, Int64} # state::State, action::Action, observation::Int64 - number of pos tests
     symptom_dist::Distribution
+    interface::SolverInterface
     Infdistributions::Array{UnivariateDistribution,1}
     symptomatic_isolation_prob::Float64 = 1.0
     asymptomatic_prob::Float64 = 0.0
     pos_test_probs::Array{Float64,1} = zeros(length(Infdistributions)) # Default to no testing
     test_delay::Int = 0
     N::Int = 1_000_000
+    discount::Float64 = 0.95
+end
+
+## Continuous
+
+function ContinuousGen(m::Params, s::State, a::Action, rng::AbstractRNG=Random.GLOBAL_RNG)
+    sp, new_inf, o = SimStep(copy(s), m, a, state_only=false)
+    r = -(10.0*sum(sp.I)/m.N + a.testing_prop)
+    o = sum(o)
+
+    return (sp=sp, o=o, r=r)
+end
+
+function ContinuousObservation(m::Params, state::State, a::Action)
+    tot_mean = 0.0
+    tot_variance = 0.0
+
+    for (i,inf) in enumerate(state.I)
+        num_already_tested = sum(state.Tests[:,i])
+        num_tested = floor(Int,(inf-num_already_tested)*a.testing_prop)
+        dist = Binomial(num_tested,m.pos_test_probs[i])
+        tot_mean += mean(dist)
+        tot_variance += std(dist)^2
+    end
+    return Normal(tot_mean, sqrt(tot_variance))
+end
+
+
+## Discrete
+
+expansion_map(x::Float64, c::Float64=2.0) = log((exp(c)-1)*x + 1)
+contraction_map(x::Float64, c::Float64=2.0) = (exp(x)-1)/(exp(c)-1)
+
+"""
+Returns tuple `(bin_centers, bin_edges)`
+OUTPUT IS EXPANSION MAPPED
+"""
+function get_bins(c::Float64=2.0, n_obs::Int=10)
+    bin_edges = LinRange(0,c,n_obs+1)
+    bin_centers = 0.5*(circshift(bin_edges,1) + bin_edges)[2:end]
+    return bin_centers, bin_edges
+end
+
+function DiscreteGen(m::Params, s::State, a::Action, rng::AbstractRNG)
+    sp, new_inf, o = SimStep(copy(s), m, a, state_only=false)
+    r = -(50.0*new_inf/s.N + a.testing_prop)
+    o = expansion_map(sum(o)/m.N)
+
+    bin_centers, _ = get_bins(m.interface.c, m.interface.n_obs)
+
+    obs = argmin(abs.(o .- bin_centers))
+    return (sp=sp, o=obs, r=r)
+end
+
+function DiscreteObservation(m::Params, state::State, a::Action)
+    c = m.interface.c
+    n_obs = m.interface.n_obs
+    _, bin_edges = get_bins(c, n_obs)
+
+    bin_edges = round.(Int,contraction_map.(bin_edges).*m.N)
+
+    tot_mean = 0.0
+    tot_variance = 0.0
+    for (i,inf) in enumerate(state.I)
+        num_already_tested = sum(state.Tests[:,i])
+        num_tested = floor(Int,(inf-num_already_tested)*a.testing_prop)
+        dist = Binomial(num_tested,m.pos_test_probs[i])
+        tot_mean += mean(dist)
+        tot_variance += std(dist)^2
+    end
+    continuous_dist = Normal(tot_mean, sqrt(tot_variance))
+    if mean(continuous_dist) ≈ 0.0
+        return SparseCat(collect(1:n_obs), vcat(1.0, zeros(Float64, n_obs-1)))
+    end
+    probs = [cdf(continuous_dist,bin_edges[idx+1])-cdf(continuous_dist,bin_edges[idx]) for idx in eachindex(bin_edges[1:end-1])]
+    probs = probs./sum(probs)
+    @assert all(probs .>= 0.0)
+    # return SparseCat(observations(m), probs)
+    return SparseCat(collect(1:n_obs), probs)
 end
 
 
@@ -154,7 +254,7 @@ Simulation History
     pos_test::Vector{Int} = nothing # By default do not record testing
 end
 
-Base.copy(state::State) = State([getfield(state,name) for name ∈ fieldnames(State)]...)
+Base.copy(state::State) = State([copy(getfield(state,name)) for name ∈ fieldnames(State)]...)
 
 """
 Convert `simHist` struct to 2-dimentional array - Collapse infected array to sum
@@ -180,7 +280,7 @@ function IncidentInfections(state::State, params::Params)::Int64
     for (i, inf) in enumerate(state.I)
         infSum += rand(RVsum(params.Infdistributions[i],inf))
     end
-    susceptible_prop = state.S/(state.N - state.R)
+    susceptible_prop = state.S/(params.N - state.R)
 
     return floor(Int, susceptible_prop*infSum)
 end
@@ -197,12 +297,6 @@ function SymptomaticIsolation(I::Array{Int,1}, params::Params)::Vector{Int64}
         symptomatic_prob = cdf(params.symptom_dist,i) - cdf(params.symptom_dist,i-1)
         isolation_prob = symptomatic_prob*(1-params.asymptomatic_prob)*params.symptomatic_isolation_prob
         isolating[i] = rand(Binomial(inf,isolation_prob))
-        if sum(isolating) > 1_000_000
-            @show isolating
-            @show inf
-            @show I
-            error("Too Many People Isolating :(")
-        end
     end
     return isolating
 end
@@ -325,13 +419,11 @@ function Simulate(T::Int, state::State, params::Params, action::Action)::SimHist
         infHist[day] = sum(state.I)
         recHist[day] = state.R
 
-
         state, new_infections, pos_tests = SimStep(state, params, action, state_only=false)
         incidentHist[day] = new_infections
         testHist[day] = sum(pos_tests)
-
     end
-    return SimHist(susHist, infHist, recHist, state.N, T, incidentHist, testHist)
+    return SimHist(susHist, infHist, recHist, params.N, T, incidentHist, testHist)
 end
 
 
@@ -394,8 +486,8 @@ function GenSimStates(T::Int, states::Vector{State}, params::Params; action::Act
     return svec
 end
 
-function FullArr(state::State)::Vector{Float64}
-    vcat(state.S,state.I,state.R)./state.N
+function FullArr(state::State, param::Params)::Vector{Float64}
+    vcat(state.S,state.I,state.R)./param.N
 end
 
 function FullArrToSIR(arr::Array{Float64,2})::Array{Float64,2}
@@ -486,9 +578,12 @@ end
 - `horizon::Int=14`: Number of days in infection age before individual is considered naturally recovered and completely uninfectious.
 ...
 """
-function initParams(;symptomatic_isolation_prob::Real=1, asymptomatic_prob::Real=0, LOD::Real=6,
-    test_delay::Int=0, infections_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/Sample50.csv", sample_size::Int=50,
-    viral_loads_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/raw_viral_load.csv", horizon::Int=14, N::Int=1_000_000)::Params
+function initParams(;symptomatic_isolation_prob::Float64=0.95, asymptomatic_prob::Float64=0.40,
+    LOD::Real=6, test_delay::Int=0, discount::Float64=0.95,
+    infections_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/Sample50.csv",
+    sample_size::Int=50, actions::Vector{Action} = Action.(0:0.1:1.0),
+    viral_loads_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/raw_viral_load.csv",
+    horizon::Int=14, N::Int=1_000_000, c::Float64=2.0, n_obs::Int=0)::Params
 
     df = File(infections_path) |> DataFrame;
     viral_loads = File(viral_loads_path) |> DataFrame;
@@ -497,9 +592,15 @@ function initParams(;symptomatic_isolation_prob::Real=1, asymptomatic_prob::Real
     pos_test_probs = [prop_above_LOD(viral_loads,day,LOD) for day in 1:horizon]
     symptom_dist = LogNormal(1.644,0.363);
 
+    if n_obs <= 0
+        interface = ContinuousSolverInterface(actions, ContinuousObservation, ContinuousGen)
+    else
+        interface = DiscreteSolverInterface(actions, DiscreteObservation, DiscreteGen, c, n_obs)
+    end
+
     return Params(
-        symptom_dist, infDistributions, symptomatic_isolation_prob,
-        asymptomatic_prob, pos_test_probs, test_delay, N
+        symptom_dist, interface, infDistributions, symptomatic_isolation_prob,
+        asymptomatic_prob, pos_test_probs, test_delay, N, discount,
         )
 end
 
