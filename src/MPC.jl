@@ -9,7 +9,7 @@ import Plots.plot!
 # List of solvers - https://jump.dev/JuMP.jl/v0.21.1/installation/#Installation-Guide-1
 
 #= Desired Structure
-Instantiate MPC - how??
+Instantiate MPC
 - Have predefined model
 - Set IC and optimize control in same function! - MPC struct is IMMUTABLE
 
@@ -108,9 +108,14 @@ function initSIR_MPC(SIR_params::Vector{Float64}; callback::Bool=true, PredHoriz
         [i=2:PredHorizon], R[i] == R[i-1] + (α+δ*T[i-1])*I[i-1]
     )
 
+    a0 = @variable(model, a0)
+    @variable(model, a0_const)
+    @constraint(model, a0con, a0 == a0_const)
+    fix(a0_const, 0.0)
+
     JuMP.@objective( # InfWeight ← 0 : Hard constraint
         model, Min,
-        InfWeight*sum(I).^2 + TestWeight*sum(T).^2 + TestRateWeight*sum((T .- circshift(T,1))[2:end].^2)
+        InfWeight*sum(I.^2) + TestWeight*sum(T.^2) + TestRateWeight*(sum((T .- circshift(T,1))[2:end].^2) + (T[1]-a0)^2)
     )
 
     S0 = @variable(model,S0 == 1.0, Param())
@@ -125,6 +130,12 @@ function initSIR_MPC(SIR_params::Vector{Float64}; callback::Bool=true, PredHoriz
     return SIR_MPC(model, PredHorizon, ControlHorizon, InfWeight, TestRateWeight, TestRateWeight, [S0,I0,R0])
 end
 
+function initSIR_MPC(SIR_params::Vector{Float64}, pomdp::Params; callback::Bool=true, PredHorizon::Int64 = 20,
+    ControlHorizon::Int64 = 3, optimizer=Ipopt.Optimizer)::SIR_MPC
+
+    initSIR_MPC(SIR_params, callback=callback, PredHorizon = PredHorizon, ControlHorizon = ControlHorizon,
+        InfWeight = pomdp.inf_loss, TestWeight = pomdp.test_loss, TestRateWeight = pomdp.testrate_loss, optimizer=optimizer)
+end
 
 """
 - `SEIR_params::Vector{Float64}`
@@ -180,9 +191,14 @@ function initSEIR_MPC(SEIR_params::Vector{Float64}; callback::Bool=true, PredHor
         [i=2:PredHorizon], R[i] == R[i-1] + dR(S[i-1],E[i-1],I[i-1],R[i-1],T[i-1])
     )
 
+    a0 = @variable(model, a0)
+    @variable(model, a0_const)
+    @constraint(model, a0con, a0 == a0_const)
+    fix(a0_const, 0.0)
+
     JuMP.@objective(
         model, Min,
-        InfWeight*sum(I).^2 + ExpWeight*sum(E).^2 +TestWeight*sum(T).^2 + TestRateWeight*sum((T .- circshift(T,1))[2:end].^2)
+        InfWeight*sum(I.^2) + ExpWeight*sum(E.^2) + TestWeight*sum(T.^2) + TestRateWeight*(sum((T .- circshift(T,1))[2:end].^2) + (T[1]-a0)^2)
     )
 
     S0 = @variable(model,S0 == 1.0, Param())
@@ -199,19 +215,30 @@ function initSEIR_MPC(SEIR_params::Vector{Float64}; callback::Bool=true, PredHor
     return SEIR_MPC(model, PredHorizon, ControlHorizon, InfWeight, ExpWeight, TestRateWeight, TestRateWeight, [S0,E0,I0,R0])
 end
 
+function initSEIR_MPC(SEIR_params::Vector{Float64}, pomdp::Params; callback::Bool=true, PredHorizon::Int64 = 20,
+    ControlHorizon::Int64 = 3, optimizer=Ipopt.Optimizer)::SEIR_MPC
+
+    return initSEIR_MPC(SEIR_params, callback=callback, PredHorizon = PredHorizo, ControlHorizon = ControlHorizon,
+        InfWeight=pomdp.inf_loss, ExpWeight=pomdp.inf_loss, TestWeight=pomdp.test_loss, TestRateWeight=pomdp.testrate_loss, optimizer=optimizer)
+end
+
 function SetIC!(mpc::MPC, state::State)
     if mpc isa SIR_MPC
         S0,I0,R0 = mpc.IC
         set_value(S0, state.S/state.N)
         set_value(I0, sum(state.I)/state.N)
         set_value(R0, state.R/state.N)
+        # fix(a0, state.prev_action.testing_prop)
+        fix(mpc.model[:a0_const], state.prev_actions.testing_prop)
     else
         S0,E0,I0,R0 = mpc.IC
         set_value(S0, state.S/state.N)
         set_value(E0, 0.)
         set_value(I0, sum(state.I)/state.N)
         set_value(R0, state.R/state.N)
+        fix(mpc.model[:a0_const], state.prev_action.testing_prop)
     end
+
 end
 
 function OptimalAction(mpc::SIR_MPC, state::State)
