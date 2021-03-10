@@ -82,6 +82,17 @@ function RVsum(dist::Gamma, N::Int)::UnivariateDistribution
     end
 end
 
+"""
+Action input to influence epidemic simulation dynamics
+
+# Arguments
+- `testing_prop::Real` - Proportion of population to be tested on one day
+    - Simplification of typical "x-days between tests per person"  action strategy due to non agent-based model
+"""
+mutable struct Action
+    testing_prop::Float64
+end
+
 
 """
 # Arguments
@@ -98,18 +109,7 @@ mutable struct State
     R::Int # Current Recovered Population
     N::Int # Total Population - move to params
     Tests::Array{Int,2} # Rows: Days from receiving test result; Columns: Infection Age
-end
-
-
-"""
-Action input to influence epidemic simulation dynamics
-
-# Arguments
-- `testing_prop::Real` - Proportion of population to be tested on one day
-    - Simplification of typical "x-days between tests per person"  action strategy due to non agent-based model
-"""
-mutable struct Action
-    testing_prop::Float64
+    prev_action::Action
 end
 
 abstract type SolverInterface end
@@ -152,13 +152,16 @@ end
     test_delay::Int = 0
     N::Int = 1_000_000
     discount::Float64 = 0.95
+    inf_loss::Float64 = 1.0
+    test_loss::Float64 = 1.0
+    testrate_loss::Float64 = 0.1
 end
 
 ## Continuous
 
 function ContinuousGen(m::Params, s::State, a::Action, rng::AbstractRNG=Random.GLOBAL_RNG)
     sp, new_inf, o = SimStep(copy(s), m, a, state_only=false)
-    r = -(10.0*sum(sp.I)/m.N + a.testing_prop)
+    r = -(m.inf_loss*sum(sp.I)/m.N + m.test_loss*a.testing_prop + m.testrate_loss*abs(a.testing_prop-s.prev_action.testing_prop))
     o = sum(o)
 
     return (sp=sp, o=o, r=r)
@@ -196,7 +199,7 @@ end
 
 function DiscreteGen(m::Params, s::State, a::Action, rng::AbstractRNG)
     sp, new_inf, o = SimStep(copy(s), m, a, state_only=false)
-    r = -(50.0*new_inf/s.N + a.testing_prop)
+    r = -(m.inf_loss*sum(sp.I)/m.N + m.test_loss*a.testing_prop + m.testrate_loss*abs(a.testing_prop-s.prev_action.testing_prop))
     o = expansion_map(sum(o)/m.N)
 
     bin_centers, _ = get_bins(m.interface.c, m.interface.n_obs)
@@ -255,6 +258,7 @@ Simulation History
 end
 
 Base.copy(state::State) = State([copy(getfield(state,name)) for name ∈ fieldnames(State)]...)
+Base.copy(action::Action) = Action([copy(getfield(action,name)) for name ∈ fieldnames(Action)]...)
 
 """
 Convert `simHist` struct to 2-dimentional array - Collapse infected array to sum
@@ -567,23 +571,43 @@ end
 
 """
 ...
-# Arguments
-- `symptomatic_isolation_prob::Real=1`: Probability that individual isolates upon becoming symptomatic `` \\in [0,1] ``.
-- `asymptomatic_prob::Real=0`: Probability that individual becomes symptomatic by infection age ``\\tau``, `` \\in [0,1] ``.
-- `LOD::Real=6`: Surveillance Test Limit of Detection (Log Scale).
+# Arguments (All optional kwargs)
 - `test_delay::Int=0`: Time between test is administered and result is returned.
+- `discount::Float64=0.95`: POMDP discount factor
+- `actions::Vector{Action} = Action.(0:0.1:1.0)`: Action space discretization
+- `N::Int=1_000_000`: Total Population Size
+- `c::Float64=2.0`: Discrete observation expansion factor, ref `expansion_map`
+- `n_obs::Int=0`: Number of observations (`n_obs==0` for continuous observation space; `n_obs>0` for discretized observation space)
+- `inf_loss::Float64 = 50.0`: Penalty coefficient for infected population proportion
+- `test_loss::Float64 = 1.0`: Penalty coefficient for testing proportion (cost of testing)
+- `testrate_loss::Float64 = 0.1`: Penalty coefficient for change in testing proportion
+- `symptomatic_isolation_prob::Float64=0.95`: Probability that individual isolates upon becoming symptomatic
+- `asymptomatic_prob::Float64=0.40`: Probability that individual becomes symptomatic by infection age
+- `LOD::Real=6`: Surveillance Test Limit of Detection (Log Scale).
 - `infections_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/Sample50.csv"`: Path to csv containing MC simulations for daily individual infections.
 - `sample_size::Int=50`: Sample size for `infections_path` csv where row entry is average infections for given sample size.
 - `viral_loads_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/raw_viral_load.csv"`: Path to csv containing viral load trajectories (cp/ml) tabulated on a daily basis for each individual.
 - `horizon::Int=14`: Number of days in infection age before individual is considered naturally recovered and completely uninfectious.
 ...
 """
-function initParams(;symptomatic_isolation_prob::Float64=0.95, asymptomatic_prob::Float64=0.40,
-    LOD::Real=6, test_delay::Int=0, discount::Float64=0.95,
+function initParams(;
+    test_delay::Int=0,
+    discount::Float64=0.95,
+    actions::Vector{Action} = Action.(0:0.1:1.0),
+    N::Int=1_000_000,
+    c::Float64=2.0,
+    n_obs::Int=0,
+    inf_loss::Float64 = 50.0,
+    test_loss::Float64 = 1.0,
+    testrate_loss::Float64 = 0.1,
+    symptomatic_isolation_prob::Float64=0.95,
+    asymptomatic_prob::Float64=0.40,
+    LOD::Real=6,
     infections_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/Sample50.csv",
-    sample_size::Int=50, actions::Vector{Action} = Action.(0:0.1:1.0),
+    sample_size::Int=50,
     viral_loads_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/raw_viral_load.csv",
-    horizon::Int=14, N::Int=1_000_000, c::Float64=2.0, n_obs::Int=0)::Params
+    horizon::Int=14
+    )::Params
 
     df = File(infections_path) |> DataFrame;
     viral_loads = File(viral_loads_path) |> DataFrame;
@@ -601,6 +625,7 @@ function initParams(;symptomatic_isolation_prob::Float64=0.95, asymptomatic_prob
     return Params(
         symptom_dist, interface, infDistributions, symptomatic_isolation_prob,
         asymptomatic_prob, pos_test_probs, test_delay, N, discount,
+        inf_loss, test_loss, testrate_loss
         )
 end
 
@@ -612,9 +637,9 @@ end
     - `I::Array{Int,1}` - Take given array as initial infections array
     - `I::Int` - Take first element of infections array (infection age 0) as given integer
 - `params::Params` - Simulation parameters
-- `N::Int` (opt) - Total Population Size
 """
-function initState(I, params::Params; N::Int=1_000_000)::State
+function initState(I, params::Params)::State
+    N = params.N
     horizon = length(params.Infdistributions)
     if isa(I, Distribution)
         I0 = round.(Int,rand(truncated(I,0,Inf),horizon))
@@ -634,7 +659,7 @@ function initState(I, params::Params; N::Int=1_000_000)::State
     R0 = 0
     tests = zeros(Int, params.test_delay+1, horizon)
 
-    return State(S0, I0, R0, N, tests)
+    return State(S0, I0, R0, N, tests, Action(0.0))
 end
 
 """
@@ -644,9 +669,9 @@ end
     - `I::Array{Int,1}` - Take given array as initial infections array
     - `I::Int` - Take first element of infections array (infection age 0) as given integer
 - `params::Params` - Simulation parameters
-- `N::Int` (opt) - Total Population Size
 """
-function initState(I, params::Params, rng::AbstractRNG; N::Int=1_000_000)::State
+function initState(I, params::Params, rng::AbstractRNG)::State
+    N = params.N
     horizon = length(params.Infdistributions)
     if isa(I, Distribution)
         I0 = round.(Int,rand(rng, truncated(I,0,Inf),horizon))
@@ -666,7 +691,7 @@ function initState(I, params::Params, rng::AbstractRNG; N::Int=1_000_000)::State
     R0 = 0
     tests = zeros(Int, params.test_delay+1, horizon)
 
-    return State(S0, I0, R0, N, tests)
+    return State(S0, I0, R0, N, tests, Action(0.0))
 end
 
 function simplex_sample(N::Int,m::Float64)
@@ -681,10 +706,9 @@ end
 Random Initial State using Bayesian Bootstrap / Simplex sampling
 # Arguments
 - `params::Params` - Simulation parameters
-- `N::Int` (opt) - Total Population Size
 """
-function initState(params::Params; N::Int=1_000_000)::State
-
+function initState(params::Params)::State
+    N = params.N
     S, inf, R = round.(Int,simplex_sample(3, Float64(N)))
 
     horizon = length(params.Infdistributions)
@@ -703,5 +727,5 @@ function initState(params::Params; N::Int=1_000_000)::State
 
     tests = zeros(Int, params.test_delay+1, horizon)
 
-    return State(S, I, R, N, tests)
+    return State(S, I, R, N, tests, Action(0.0))
 end
