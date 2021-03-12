@@ -169,7 +169,7 @@ Fit SIR or SEIR model parameters to an ensemble of stochastic simulations
 """
 function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Params, action::Action; show_trace::Bool=false)
 
-    sims = SimulateEnsemble(T, trajectories, params, action, N=1_000_000)
+    sims = SimulateEnsemble(T, trajectories, params, action)
     data_times = 1:T
     ref_data = Array(sims)./1_000_000
 
@@ -220,7 +220,7 @@ function FitRandControlledEnsemble(kind::Symbol, T::Int, trajectories::Int64, pa
 
     actions = rand(trajectories) .|> Action
 
-    sims = SimulateEnsemble(T, trajectories, params, actions, N=1_000_000)
+    sims = SimulateEnsemble(T, trajectories, params, actions)
     data_times = 1:T
     ref_data = Array(sims)./1_000_000
 

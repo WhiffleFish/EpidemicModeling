@@ -1,6 +1,10 @@
 import Statistics.mean
 
-function Statistics.mean(states::Vector{State}, pomdp::Params)::State
+function initialbelief(pomdp::Params, np::Int)
+    ParticleCollection([rand(initialstate(pomdp)) for _ in 1:np])
+end
+
+function mean(states::Vector{State}, pomdp::Params)::State
     n_states = length(states)
     sumS = 0
     sumI = zeros(Int,length(first(states).I))
@@ -18,4 +22,4 @@ function Statistics.mean(states::Vector{State}, pomdp::Params)::State
     return State(avgS, avgI, avgR, pomdp.N, avgTests, first(states).prev_action)
 end
 
-Statistics.mean(pc::ParticleCollection{State}, pomdp::Params) = mean(pc.particles, pomdp)
+mean(pc::ParticleCollection{State}, pomdp::Params) = mean(pc.particles, pomdp)

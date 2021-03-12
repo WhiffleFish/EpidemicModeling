@@ -1,4 +1,5 @@
 using Random, Distributions, Plots, Parameters, POMDPs
+using ParticleFilters
 import Plots.plot
 import CSV.File
 import DataFrames.DataFrame
@@ -93,6 +94,7 @@ mutable struct Action
     testing_prop::Float64
 end
 
+Base.zero(Action) = Action(0.0)
 
 """
 # Arguments
@@ -159,9 +161,13 @@ end
 
 ## Continuous
 
+function reward(m::Params, s::State, a::Action, sp::State)
+    return -(m.inf_loss*sum(sp.I)/m.N + m.test_loss*a.testing_prop + m.testrate_loss*abs(a.testing_prop-s.prev_action.testing_prop))
+end
+
 function ContinuousGen(m::Params, s::State, a::Action, rng::AbstractRNG=Random.GLOBAL_RNG)
     sp, new_inf, o = SimStep(copy(s), m, a, state_only=false)
-    r = -(m.inf_loss*sum(sp.I)/m.N + m.test_loss*a.testing_prop + m.testrate_loss*abs(a.testing_prop-s.prev_action.testing_prop))
+    r = reward(m, s, a, sp)
     o = sum(o)
 
     return (sp=sp, o=o, r=r)
@@ -199,7 +205,7 @@ end
 
 function DiscreteGen(m::Params, s::State, a::Action, rng::AbstractRNG)
     sp, new_inf, o = SimStep(copy(s), m, a, state_only=false)
-    r = -(m.inf_loss*sum(sp.I)/m.N + m.test_loss*a.testing_prop + m.testrate_loss*abs(a.testing_prop-s.prev_action.testing_prop))
+    r = reward(m, s, a, sp)
     o = expansion_map(sum(o)/m.N)
 
     bin_centers, _ = get_bins(m.interface.c, m.interface.n_obs)
@@ -247,15 +253,18 @@ Simulation History
 - `T::Int` - Simulation Time
 - `incident::Array{Int, 1}` = nothing - Incident Infections need not always be recorded
 """
-@with_kw mutable struct SimHist
+@with_kw struct SimHist
     sus::Array{Int, 1} # Susceptible Population History
     inf::Array{Int, 1} # Infected Population History
     rec::Array{Int, 1} # Recovered Population History
     N::Int # Total Population
     T::Int # Simulation Time
-    incident::Array{Int, 1} = nothing # Incident Infections need not always be recorded
-    pos_test::Vector{Int} = nothing # By default do not record testing
+    pos_test::Vector{Int} = Int[]
+    actions::Vector{Action} = Action[]
+    rewards::Vector{Float64} = Float64[]
+    beliefs::Vector{ParticleCollection{State}} = ParticleCollection{State}[]
 end
+
 
 Base.copy(state::State) = State([copy(getfield(state,name)) for name ∈ fieldnames(State)]...)
 Base.copy(action::Action) = Action([copy(getfield(action,name)) for name ∈ fieldnames(Action)]...)
@@ -415,19 +424,24 @@ function Simulate(T::Int, state::State, params::Params, action::Action)::SimHist
     susHist = zeros(Int,T)
     infHist = zeros(Int,T)
     recHist = zeros(Int,T)
-    incidentHist = zeros(Int,T)
     testHist = zeros(Int,T)
+    actionHist = [action for _  in 1:T]
+    rewardHist = zeros(Float64, T)
 
     for day in 1:T
         susHist[day] = state.S
         infHist[day] = sum(state.I)
         recHist[day] = state.R
 
-        state, new_infections, pos_tests = SimStep(state, params, action, state_only=false)
-        incidentHist[day] = new_infections
+
+        sp, new_infections, pos_tests = SimStep(state, params, action, state_only=false)
+        r = reward(params, state, action,sp)
+
         testHist[day] = sum(pos_tests)
+        rewardHist[day] = r
+        state = sp
     end
-    return SimHist(susHist, infHist, recHist, params.N, T, incidentHist, testHist)
+    return SimHist(susHist, infHist, recHist, params.N, T, testHist, actionHist, rewardHist, ParticleCollection{State}[])
 end
 
 
@@ -442,8 +456,8 @@ Run multiple simulations with random initial states but predefined actions
 # Return
 - `Vector{SimHist}`
 """
-function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, action::Action; N::Int=1_000_000)::Vector{SimHist}
-    [Simulate(T, initState(params, N=N), params, action) for _ in 1:trajectories]
+function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, action::Action)::Vector{SimHist}
+    [Simulate(T, initState(params), params, action) for _ in 1:trajectories]
 end
 
 """
@@ -457,8 +471,8 @@ Run multiple simulations with varying predefined actions and random initial stat
 # Return
 - `Vector{SimHist}`
 """
-function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, actions::Vector{Action}; N::Int=1_000_000)::Vector{SimHist}
-    [Simulate(T, initState(params, N=N), params, actions[i]) for i in 1:trajectories]
+function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, actions::Vector{Action})::Vector{SimHist}
+    [Simulate(T, initState(params), params, actions[i]) for i in 1:trajectories]
 end
 
 """
@@ -568,6 +582,21 @@ function plot(hist::SimHist; prop::Bool=true, kind::Symbol=:line, order::String=
     plotHist(hist, prop=prop, kind=kind, order=order)
 end
 
+function plot(pomdp::Params, hist::SimHist)
+    l = @layout [a;b]
+    as = [a.testing_prop for a in hist.actions]
+
+    p1_label = length(hist.beliefs) > 0 ? "True" : ""
+    p1 = plot(0:hist.T-1, hist.inf./hist.N, label=p1_label)
+    if length(hist.beliefs) > 0
+        plot!(p1,0:hist.T-1, [sum(mean(states, pomdp).I)/pomdp.N for states in hist.beliefs], label="Estimated")
+    end
+    ylabel!("Infected Prop")
+    p2 = plot(0:hist.T-1, as, label="", ylabel="Testing Prop")
+    plt = plot(p1, p2, layout=l)
+    xlabel!("Day")
+    display(plt)
+end
 
 """
 ...
@@ -629,7 +658,6 @@ function initParams(;
         )
 end
 
-
 """
 # Arguments
 - `I`: Initial infections
@@ -638,39 +666,7 @@ end
     - `I::Int` - Take first element of infections array (infection age 0) as given integer
 - `params::Params` - Simulation parameters
 """
-function initState(I, params::Params)::State
-    N = params.N
-    horizon = length(params.Infdistributions)
-    if isa(I, Distribution)
-        I0 = round.(Int,rand(truncated(I,0,Inf),horizon))
-        @assert sum(I0) <= N # Ensure Sampled infected is not greater than total population
-    elseif isa(I, Array{Int, 1})
-        @assert all(I .>= 0 )
-        @assert sum(I) <= N
-        I0 = I
-    elseif isa(I, Int)
-        I0 = zeros(Int,horizon)
-        I0[1] = I
-    else
-        throw(DomainError(I, "`I` must be distribution, array of integers, or single integer"))
-    end
-
-    S0 = N - sum(I0)
-    R0 = 0
-    tests = zeros(Int, params.test_delay+1, horizon)
-
-    return State(S0, I0, R0, N, tests, Action(0.0))
-end
-
-"""
-# Arguments
-- `I`: Initial infections
-    - `I::Distribution` - Sample all elements in Infections array from given distribution
-    - `I::Array{Int,1}` - Take given array as initial infections array
-    - `I::Int` - Take first element of infections array (infection age 0) as given integer
-- `params::Params` - Simulation parameters
-"""
-function initState(I, params::Params, rng::AbstractRNG)::State
+function initState(I, params::Params, rng::AbstractRNG=Random.GLOBAL_RNG)::State
     N = params.N
     horizon = length(params.Infdistributions)
     if isa(I, Distribution)
@@ -694,8 +690,8 @@ function initState(I, params::Params, rng::AbstractRNG)::State
     return State(S0, I0, R0, N, tests, Action(0.0))
 end
 
-function simplex_sample(N::Int,m::Float64)
-    v = rand(N-1)*m
+function simplex_sample(N::Int, m::Float64, rng=Random.GLOBAL_RNG)
+    v = rand(rng, N-1)*m
     push!(v, 0, m)
     sort!(v)
     return (v - circshift(v,1))[2:end]
@@ -707,13 +703,13 @@ Random Initial State using Bayesian Bootstrap / Simplex sampling
 # Arguments
 - `params::Params` - Simulation parameters
 """
-function initState(params::Params)::State
+function initState(params::Params, rng=Random.GLOBAL_RNG)::State
     N = params.N
-    S, inf, R = round.(Int,simplex_sample(3, Float64(N)))
+    S, inf, R = round.(Int,simplex_sample(3, Float64(N), rng))
 
     horizon = length(params.Infdistributions)
 
-    I = round.(Int,simplex_sample(horizon, Float64(inf)))
+    I = round.(Int,simplex_sample(horizon, Float64(inf), rng))
 
     leftover = N - (S + sum(I) + R)
     max_idx = argmax([S, sum(I), R])

@@ -218,7 +218,7 @@ end
 function initSEIR_MPC(SEIR_params::Vector{Float64}, pomdp::Params; callback::Bool=true, PredHorizon::Int64 = 20,
     ControlHorizon::Int64 = 3, optimizer=Ipopt.Optimizer)::SEIR_MPC
 
-    return initSEIR_MPC(SEIR_params, callback=callback, PredHorizon = PredHorizo, ControlHorizon = ControlHorizon,
+    return initSEIR_MPC(SEIR_params, callback=callback, PredHorizon = PredHorizon, ControlHorizon = ControlHorizon,
         InfWeight=pomdp.inf_loss, ExpWeight=pomdp.inf_loss, TestWeight=pomdp.test_loss, TestRateWeight=pomdp.testrate_loss, optimizer=optimizer)
 end
 
@@ -263,13 +263,15 @@ function OptimalAction(mpc::SEIR_MPC, state::State)
     return JuMP.value.(model[:T])[1:mpc.ControlHorizon]
 end
 
-function MPCSimulate(T::Int, state::State, params::Params, mpc::MPC)
+OptimalAction(pomdp::Params, mpc::MPC, pc::ParticleCollection) = OptimalAction(mpc,mean(pc,pomdp))
+
+function Simulate(T::Int, state::State, params::Params, mpc::MPC)::SimHist
     susHist = zeros(Int,T)
     infHist = zeros(Int,T)
     recHist = zeros(Int,T)
-    incidentHist = zeros(Int,T)
     testHist = zeros(Int,T)
-    actionHist = zeros(Float64,T)
+    actionHist = zeros(Action,T)
+    rewardHist  = zeros(Float64,T)
 
     actions = nothing
     for day in ProgressBar(1:T)
@@ -283,14 +285,54 @@ function MPCSimulate(T::Int, state::State, params::Params, mpc::MPC)
         susHist[day] = state.S
         infHist[day] = sum(state.I)
         recHist[day] = state.R
-        actionHist[day] = action.testing_prop
+        actionHist[day] = action
 
-        state, new_infections, pos_tests = SimStep(state, params, action, state_only=false)
-        incidentHist[day] = new_infections
+        sp, new_infections, pos_tests = SimStep(state, params, action, state_only=false)
+        r = reward(params, state, action, sp)
+
         testHist[day] = sum(pos_tests)
+        rewardHist[day] = r
+
+        state = sp
     end
 
-    return SimHist(susHist, infHist, recHist, state.N, T, incidentHist, testHist), actionHist
+    return SimHist(susHist, infHist, recHist, state.N, T, testHist, actionHist, rewardHist, Vector{ParticleCollection}[])
+end
+
+function Simulate(T::Int, state::State, b0::ParticleCollection, pomdp::Params, mpc::MPC)
+    upd = BootstrapFilter(pomdp, n_particles(b0))
+    susHist = zeros(Int,T)
+    infHist = zeros(Int,T)
+    recHist = zeros(Int,T)
+    testHist = zeros(Int,T)
+    actionHist = zeros(Action,T)
+    rewardHist = zeros(Float64,T)
+    beliefHist = ParticleCollection{State}[]
+
+    b = b0
+    actions = nothing
+    for day in ProgressBar(1:T)
+
+        if ((day-1) % mpc.ControlHorizon) == 0
+            actions = OptimalAction(pomdp, mpc, b) |> reverse
+        end
+
+        action = Action(pop!(actions))
+
+        susHist[day] = state.S
+        infHist[day] = sum(state.I)
+        recHist[day] = state.R
+        actionHist[day] = action
+        push!(beliefHist, b)
+
+        # state, new_infections, pos_tests = SimStep(state, params, action, state_only=false)
+        state, o, r = POMDPs.gen(pomdp, state, action)
+        b = update(upd, b, action, o)
+        testHist[day] = sum(o)
+        rewardHist[day] = r
+    end
+
+    return SimHist(susHist, infHist, recHist, state.N, T, testHist, actionHist, rewardHist, beliefHist)
 end
 
 

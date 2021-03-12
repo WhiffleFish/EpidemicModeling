@@ -28,22 +28,6 @@ end
 
 
 function GetICs(params::Params,N=1_000)::Vector{State}
-    #
-    # dists = repeat([Normal(1_000,500), Normal(10_000,5_000), Normal(50_000,10_000)],4)
-    #
-    # ICs = GenSimStates(50, [initState(dists[i],params) for i in eachindex(dists)], params)
-    #
-    # dist = zeros(Float64,3,length(ICs))
-    # for (i,state) in enumerate(ICs)
-    #     dist[1,i] = state.S/1_000_000
-    #     dist[2,i] = sum(state.I)/1_000_000
-    #     dist[3,i] = state.R/1_000_000
-    # end
-    #
-    # indices = sort(rand(findall(<=(0.05), dist[2,:]),100)) |> unique
-    #
-    # deleteat!(ICs,indices)
-    # return ICs
     return [initState(params) for _ in 1:N]
 end
 
