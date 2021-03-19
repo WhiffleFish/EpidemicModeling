@@ -76,7 +76,8 @@ end
 - `optimizer=Ipopt.Optimizer` (opt)
 """
 function initSIR_MPC(SIR_params::Vector{Float64}; callback::Bool=true, PredHorizon::Int64 = 20, ControlHorizon::Int64 = 3,
-    InfWeight::Float64 = 30., TestWeight::Float64 = 0.5, TestRateWeight::Float64 = 10., optimizer=Ipopt.Optimizer)::SIR_MPC
+    InfWeight::Float64 = 30., TestWeight::Float64 = 0.5, TestRateWeight::Float64 = 10., optimizer=Ipopt.Optimizer, test_period::Int=1)::SIR_MPC
+    # NOTE: if PredHorizon=1, we should really be tracking 2 states (s0,s1), as just tracking s0 would not make sense
 
     α, β, δ = SIR_params
     if callback
@@ -85,12 +86,18 @@ function initSIR_MPC(SIR_params::Vector{Float64}; callback::Bool=true, PredHoriz
         model = JuMP.Model(optimizer_with_attributes(optimizer, "print_level"=>0))
     end
 
+    n_actions = ceil(Int, PredHorizon/test_period)
+    action_counts = repeat([test_period],n_actions)
+    action_counts[end] = n_actions*test_period - PredHorizon
+
     JuMP.@variables model begin
         S[1:PredHorizon]
         I[1:PredHorizon]
         R[1:PredHorizon]
-        0 <= T[1:PredHorizon] <= 1
+        0 <= T[1:n_actions] <= 1
     end
+
+    a_ind(k) = ceil(Int, k/test_period)
 
     # Dynamic Constraints
     JuMP.@constraint(
@@ -100,12 +107,12 @@ function initSIR_MPC(SIR_params::Vector{Float64}; callback::Bool=true, PredHoriz
 
     JuMP.@constraint(
         model,
-        [i=2:PredHorizon], I[i] == I[i-1] + β*I[i-1]*S[i-1] - (α+δ*T[i-1])*I[i-1]
+        [i=2:PredHorizon], I[i] == I[i-1] + β*I[i-1]*S[i-1] - (α+δ*T[a_ind(i-1)])*I[i-1]
     )
 
     JuMP.@constraint(
         model,
-        [i=2:PredHorizon], R[i] == R[i-1] + (α+δ*T[i-1])*I[i-1]
+        [i=2:PredHorizon], R[i] == R[i-1] + (α+δ*T[a_ind(i-1)])*I[i-1]
     )
 
     a0 = @variable(model, a0)
@@ -115,7 +122,7 @@ function initSIR_MPC(SIR_params::Vector{Float64}; callback::Bool=true, PredHoriz
 
     JuMP.@objective( # InfWeight ← 0 : Hard constraint
         model, Min,
-        InfWeight*sum(I.^2) + TestWeight*sum(T.^2) + TestRateWeight*(sum((T .- circshift(T,1))[2:end].^2) + (T[1]-a0)^2)
+        InfWeight*sum(I.^2) + TestWeight*sum((T .* action_counts).^2) + TestRateWeight*(sum((T .- circshift(T,1))[2:end].^2) + (T[1]-a0)^2)
     )
 
     S0 = @variable(model,S0 == 1.0, Param())
@@ -134,7 +141,7 @@ function initSIR_MPC(SIR_params::Vector{Float64}, pomdp::Params; callback::Bool=
     ControlHorizon::Int64 = 3, optimizer=Ipopt.Optimizer)::SIR_MPC
 
     initSIR_MPC(SIR_params, callback=callback, PredHorizon = PredHorizon, ControlHorizon = ControlHorizon,
-        InfWeight = pomdp.inf_loss, TestWeight = pomdp.test_loss, TestRateWeight = pomdp.testrate_loss, optimizer=optimizer)
+        InfWeight = pomdp.inf_loss, TestWeight = pomdp.test_loss, TestRateWeight = pomdp.testrate_loss, optimizer=optimizer, test_period=pomdp.test_period)
 end
 
 """
@@ -148,7 +155,7 @@ end
 - `optimizer=Ipopt.Optimizer` (opt)
 """
 function initSEIR_MPC(SEIR_params::Vector{Float64}; callback::Bool=true, PredHorizon::Int64 = 20, ControlHorizon::Int64 = 3,
-    InfWeight::Float64=20., ExpWeight::Float64=20., TestWeight::Float64=0.5, TestRateWeight::Float64=10., optimizer=Ipopt.Optimizer)::SEIR_MPC
+    InfWeight::Float64=20., ExpWeight::Float64=20., TestWeight::Float64=0.5, TestRateWeight::Float64=10., optimizer=Ipopt.Optimizer, test_period::Int=1)::SEIR_MPC
 
     α, β, γ, δ, ϵ = SEIR_params
 
@@ -163,32 +170,38 @@ function initSEIR_MPC(SEIR_params::Vector{Float64}; callback::Bool=true, PredHor
     dI(S,E,I,R,T) = (γ+ϵ*T)*E - (α+δ*T)*I
     dR(S,E,I,R,T) = (α+δ*T)*I
 
+    n_actions = ceil(Int, PredHorizon/test_period)
+    action_counts = repeat([test_period],n_actions)
+    action_counts[end] = n_actions*test_period - PredHorizon
+
     JuMP.@variables model begin
         S[1:PredHorizon]
         E[1:PredHorizon]
         I[1:PredHorizon]
         R[1:PredHorizon]
-        0 <= T[1:PredHorizon] <= 1
+        0 <= T[1:n_actions] <= 1
     end
 
+    a_ind(k) = ceil(Int, k/test_period)
+
     JuMP.@constraint(
         model,
-        [i=2:PredHorizon], S[i] == S[i-1] + dS(S[i-1],E[i-1],I[i-1],R[i-1],T[i-1])
+        [i=2:PredHorizon], S[i] == S[i-1] + dS(S[i-1],E[i-1],I[i-1],R[i-1],T[a_ind(i-1)])
     )
 
     JuMP.@constraint(
         model,
-        [i=2:PredHorizon], E[i] == E[i-1] + dE(S[i-1],E[i-1],I[i-1],R[i-1],T[i-1])
+        [i=2:PredHorizon], E[i] == E[i-1] + dE(S[i-1],E[i-1],I[i-1],R[i-1],T[a_ind(i-1)])
     )
 
     JuMP.@constraint(
         model,
-        [i=2:PredHorizon], I[i] == I[i-1] + dI(S[i-1],E[i-1],I[i-1],R[i-1],T[i-1])
+        [i=2:PredHorizon], I[i] == I[i-1] + dI(S[i-1],E[i-1],I[i-1],R[i-1],T[a_ind(i-1)])
     )
 
     JuMP.@constraint(
         model,
-        [i=2:PredHorizon], R[i] == R[i-1] + dR(S[i-1],E[i-1],I[i-1],R[i-1],T[i-1])
+        [i=2:PredHorizon], R[i] == R[i-1] + dR(S[i-1],E[i-1],I[i-1],R[i-1],T[a_ind(i-1)])
     )
 
     a0 = @variable(model, a0)
@@ -198,7 +211,7 @@ function initSEIR_MPC(SEIR_params::Vector{Float64}; callback::Bool=true, PredHor
 
     JuMP.@objective(
         model, Min,
-        InfWeight*sum(I.^2) + ExpWeight*sum(E.^2) + TestWeight*sum(T.^2) + TestRateWeight*(sum((T .- circshift(T,1))[2:end].^2) + (T[1]-a0)^2)
+        InfWeight*sum(I.^2) + ExpWeight*sum(E.^2) + TestWeight*sum((T .* action_counts).^2) + TestRateWeight*(sum((T .- circshift(T,1))[2:end].^2) + (T[1]-a0)^2)
     )
 
     S0 = @variable(model,S0 == 1.0, Param())
@@ -219,7 +232,7 @@ function initSEIR_MPC(SEIR_params::Vector{Float64}, pomdp::Params; callback::Boo
     ControlHorizon::Int64 = 3, optimizer=Ipopt.Optimizer)::SEIR_MPC
 
     return initSEIR_MPC(SEIR_params, callback=callback, PredHorizon = PredHorizon, ControlHorizon = ControlHorizon,
-        InfWeight=pomdp.inf_loss, ExpWeight=pomdp.inf_loss, TestWeight=pomdp.test_loss, TestRateWeight=pomdp.testrate_loss, optimizer=optimizer)
+        InfWeight=pomdp.inf_loss, ExpWeight=pomdp.inf_loss, TestWeight=pomdp.test_loss, TestRateWeight=pomdp.testrate_loss, optimizer=optimizer, test_period=pomdp.test_period)
 end
 
 function SetIC!(mpc::MPC, state::State)
@@ -273,14 +286,22 @@ function Simulate(T::Int, state::State, params::Params, mpc::MPC)::SimHist
     actionHist = zeros(Action,T)
     rewardHist  = zeros(Float64,T)
 
-    actions = nothing
+    if mpc.ControlHorizon != 1
+        warn("Non-unity control horizon feature removed due to conflict with test_period > 1")
+    end
+
+    # actions = nothing
     for day in ProgressBar(1:T)
 
-        if ((day-1) % mpc.ControlHorizon) == 0
-            actions = OptimalAction(mpc, state) |> reverse
+        # if ((day-1) % mpc.ControlHorizon) == 0
+        #     actions = OptimalAction(mpc, state) |> reverse
+        # end
+        # action = Action(pop!(actions))
+        if (day-1)%pomdp.test_period == 0
+            action = Action(first(OptimalAction(pomdp, mpc, b)))
+        else
+            action = actionHist[day-1]
         end
-
-        action = Action(pop!(actions))
 
         susHist[day] = state.S
         infHist[day] = sum(state.I)
@@ -300,7 +321,7 @@ function Simulate(T::Int, state::State, params::Params, mpc::MPC)::SimHist
 end
 
 function Simulate(T::Int, state::State, b0::ParticleCollection, pomdp::Params, mpc::MPC)
-    upd = BootstrapFilter(pomdp, n_particles(b0))
+    upd = BootstrapFilter(unity_test_period(pomdp), n_particles(b0))
     susHist = zeros(Int,T)
     infHist = zeros(Int,T)
     recHist = zeros(Int,T)
@@ -309,15 +330,24 @@ function Simulate(T::Int, state::State, b0::ParticleCollection, pomdp::Params, m
     rewardHist = zeros(Float64,T)
     beliefHist = ParticleCollection{State}[]
 
+    if mpc.ControlHorizon != 1
+        warn("Non-unity control horizon feature removed due to conflict with test_period > 1")
+    end
+
     b = b0
-    actions = nothing
+    # actions = nothing
     for day in ProgressBar(1:T)
 
-        if ((day-1) % mpc.ControlHorizon) == 0
-            actions = OptimalAction(pomdp, mpc, b) |> reverse
-        end
+        # if ((day-1) % mpc.ControlHorizon) == 0
+        #     actions = OptimalAction(pomdp, mpc, b) |> reverse
+        # end
+        # action = Action(pop!(actions))
 
-        action = Action(pop!(actions))
+        if (day-1)%pomdp.test_period == 0
+            action = Action(first(OptimalAction(pomdp, mpc, b)))
+        else
+            action = actionHist[day-1]
+        end
 
         susHist[day] = state.S
         infHist[day] = sum(state.I)
@@ -326,7 +356,7 @@ function Simulate(T::Int, state::State, b0::ParticleCollection, pomdp::Params, m
         push!(beliefHist, b)
 
         # state, new_infections, pos_tests = SimStep(state, params, action, state_only=false)
-        state, o, r = POMDPs.gen(pomdp, state, action)
+        state,o,r = pomdp.interface.gen(pomdp, state, action)
         b = update(upd, b, action, o)
         testHist[day] = sum(o)
         rewardHist[day] = r

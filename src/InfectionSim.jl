@@ -1,4 +1,4 @@
-using Random, Distributions, Plots, Parameters, POMDPs
+using Random, Distributions, Plots, Parameters, POMDPs, POMDPModelTools
 using ParticleFilters
 import Plots.plot
 import CSV.File
@@ -157,6 +157,7 @@ end
     inf_loss::Float64 = 1.0
     test_loss::Float64 = 1.0
     testrate_loss::Float64 = 0.1
+    test_period::Int = 1
 end
 
 ## Continuous
@@ -635,7 +636,8 @@ function initParams(;
     infections_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/Sample50.csv",
     sample_size::Int=50,
     viral_loads_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/raw_viral_load.csv",
-    horizon::Int=14
+    horizon::Int=14,
+    test_period::Int=1
     )::Params
 
     df = File(infections_path) |> DataFrame;
@@ -654,7 +656,18 @@ function initParams(;
     return Params(
         symptom_dist, interface, infDistributions, symptomatic_isolation_prob,
         asymptomatic_prob, pos_test_probs, test_delay, N, discount,
-        inf_loss, test_loss, testrate_loss
+        inf_loss, test_loss, testrate_loss, test_period
+        )
+end
+
+"""
+Take given Params obj and return same Params obj only with test_period changed to 1
+"""
+function unity_test_period(pomdp::Params)::Params
+    return Params(
+        pomdp.symptom_dist, pomdp.interface, pomdp.Infdistributions, pomdp.symptomatic_isolation_prob,
+        pomdp.asymptomatic_prob, pomdp.pos_test_probs, pomdp.test_delay, pomdp.N, pomdp.discount,
+        pomdp.inf_loss, pomdp.test_loss, pomdp.testrate_loss, 1
         )
 end
 
