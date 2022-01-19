@@ -1,7 +1,3 @@
-using DifferentialEquations, DiffEqParamEstim, Optim
-# using LossFunctions
-include("InfectionSim.jl")
-
 SIR_ODE = @ode_def SIR begin
     dS = -β*I*S
     dI = β*I*S - α*I
@@ -113,7 +109,7 @@ end
 - `ref_data` - Reference Data
 """
 function SEIR_loss(x, ref_data)::Float64
-    L = zeros(3,size(ref_data)[2])
+    L = zeros(3,size(ref_data,2))
     L[1,:] = x[1,:]
     L[2,:] = sum(x[2:3,:], dims=1)[1,:]
     L[3,:] = x[4,:]
@@ -145,7 +141,7 @@ function FitModel(kind::Symbol, simHist::SimHist)
         throw(DomainError("Unrecognized Model kind. Must be :SIR or :SEIR"))
     end
 
-    result = optimize(objective, p, NelderMead())
+    result = Optim.optimize(objective, p, NelderMead())
 
     return result, Optim.minimizer(result)
 end
@@ -171,7 +167,7 @@ function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Para
 
     sims = SimulateEnsemble(T, trajectories, params, action)
     data_times = 1:T
-    ref_data = Array(sims)./1_000_000
+    ref_data = Array(sims)./params.N
 
     if kind == :SIR
         first_guess = [0.1,0.1]
@@ -179,7 +175,7 @@ function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Para
 
         LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
 
-        result = optimize(
+        result = Optim.optimize(
             x->SIR_param_loss(x,LossCalcParams),
             first_guess,
             NelderMead(),
@@ -192,7 +188,7 @@ function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Para
 
         LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
 
-        result = optimize(
+        result = Optim.optimize(
             x->SEIR_param_loss(x,LossCalcParams),
             first_guess,
             NelderMead(),
@@ -222,7 +218,7 @@ function FitRandControlledEnsemble(kind::Symbol, T::Int, trajectories::Int64, pa
 
     sims = SimulateEnsemble(T, trajectories, params, actions)
     data_times = 1:T
-    ref_data = Array(sims)./1_000_000
+    ref_data = Array(sims)./params.N
 
     if kind == :SIR
         first_guess = [0.1, 0.1, 0.1]
@@ -230,7 +226,7 @@ function FitRandControlledEnsemble(kind::Symbol, T::Int, trajectories::Int64, pa
 
         LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
 
-        result = optimize(
+        result = Optim.optimize(
             x->SIR_CTRL_param_loss(x, LossCalcParams),
             first_guess,
             NelderMead(),
@@ -243,7 +239,7 @@ function FitRandControlledEnsemble(kind::Symbol, T::Int, trajectories::Int64, pa
 
         LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
 
-        result = optimize(
+        result = Optim.optimize(
             x->SEIR_CTRL_param_loss(x, LossCalcParams),
             first_guess,
             NelderMead(),

@@ -1,7 +1,3 @@
-using Test
-println("Importing InfectionSim.jl ...")
-@time include("../src/InfectionSim.jl")
-
 println("Creating Params...")
 TestParams = [
     initParams(symptomatic_isolation_prob=1.0, asymptomatic_prob=0.0,LOD=5),
@@ -20,7 +16,6 @@ function test_sim(state::State, action::Action, param::Params; T=100)
     plt = plotHist(simHist, kind=:stack, order="IRS",prop=true)
     display(plt)
     @test all(0 .<= Array(simHist) .<= simHist.N)
-    @test all(0 .<= simHist.incident .<= simHist.N)
 end
 
 println("TESTING")

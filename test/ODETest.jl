@@ -1,8 +1,3 @@
-println("Importing...")
-include("/Users/tyler/Documents/code/EpidemicModeling/src/InfectionSim.jl")
-include("/Users/tyler/Documents/code/EpidemicModeling/src/ODEFit.jl")
-
-
 T = 20 # Sim Time
 N = 10 # Number of Ensemble MC Sims to fit
 param = initParams(
@@ -16,7 +11,7 @@ param = initParams(
 
 println("\nSINGLE SIR FIT...\n")
 
-state = initState(fill(10_000,14),param, N=1_000_000)
+state = initState(fill(10_000,14), param)
 action = Action(0.0)
 simHist_SingleSIR = Simulate(T, state, param, action)
 
@@ -38,7 +33,7 @@ println(res)
 
 println("\nSINGLE SEIR FIT...\n")
 
-state = initState(param, N=1_000_000)
+state = initState(param)
 action = Action(0.0)
 simHist = Simulate(T, state, param, action)
 

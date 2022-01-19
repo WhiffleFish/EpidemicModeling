@@ -1,4 +1,3 @@
-using ProgressBars
 using POMCPOW
 
 function POMDPs.gen(pomdp::Params, s::State, a::Action, rng::AbstractRNG=Random.GLOBAL_RNG)
@@ -31,7 +30,7 @@ function Simulate(T::Int, state::State, b::ParticleCollection{State}, pomdp::Par
     single_step_pomdp = unity_test_period(pomdp)
     upd = BootstrapFilter(single_step_pomdp, n_particles(b))
 
-    for day in ProgressBar(1:T)
+    @showprogress for day in 1:T
 
         if (day-1)%pomdp.test_period == 0
             action = POMDPs.action(planner, b)

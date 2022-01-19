@@ -1,9 +1,3 @@
-using JuMP
-using ParameterJuMP
-using Ipopt
-using ProgressBars
-import Plots.plot
-import Plots.plot!
 # GLPK does not work with '==' constraints
 
 # List of solvers - https://jump.dev/JuMP.jl/v0.21.1/installation/#Installation-Guide-1
@@ -137,11 +131,11 @@ function initSIR_MPC(SIR_params::Vector{Float64}; callback::Bool=true, PredHoriz
     return SIR_MPC(model, PredHorizon, ControlHorizon, InfWeight, TestRateWeight, TestRateWeight, [S0,I0,R0])
 end
 
-function initSIR_MPC(SIR_params::Vector{Float64}, pomdp::Params; callback::Bool=true, PredHorizon::Int64 = 20,
+function initSIR_MPC(SIR_params::Vector{Float64}, params::Params; callback::Bool=true, PredHorizon::Int64 = 20,
     ControlHorizon::Int64 = 3, optimizer=Ipopt.Optimizer)::SIR_MPC
 
     initSIR_MPC(SIR_params, callback=callback, PredHorizon = PredHorizon, ControlHorizon = ControlHorizon,
-        InfWeight = pomdp.inf_loss, TestWeight = pomdp.test_loss, TestRateWeight = pomdp.testrate_loss, optimizer=optimizer, test_period=pomdp.test_period)
+        InfWeight = params.inf_loss, TestWeight = params.test_loss, TestRateWeight = params.testrate_loss, optimizer=optimizer, test_period=params.test_period)
 end
 
 """
@@ -211,7 +205,10 @@ function initSEIR_MPC(SEIR_params::Vector{Float64}; callback::Bool=true, PredHor
 
     JuMP.@objective(
         model, Min,
-        InfWeight*sum(I.^2) + ExpWeight*sum(E.^2) + TestWeight*sum((T .* action_counts).^2) + TestRateWeight*(sum((T .- circshift(T,1))[2:end].^2) + (T[1]-a0)^2)
+            InfWeight*sum(I.^2) +
+            ExpWeight*sum(E.^2) +
+            TestWeight*sum((T .* action_counts).^2) +
+            TestRateWeight*(sum((T .- circshift(T,1))[2:end].^2) + (T[1]-a0)^2)
     )
 
     S0 = @variable(model,S0 == 1.0, Param())
@@ -228,11 +225,11 @@ function initSEIR_MPC(SEIR_params::Vector{Float64}; callback::Bool=true, PredHor
     return SEIR_MPC(model, PredHorizon, ControlHorizon, InfWeight, ExpWeight, TestRateWeight, TestRateWeight, [S0,E0,I0,R0])
 end
 
-function initSEIR_MPC(SEIR_params::Vector{Float64}, pomdp::Params; callback::Bool=true, PredHorizon::Int64 = 20,
+function initSEIR_MPC(SEIR_params::Vector{Float64}, params::Params; callback::Bool=true, PredHorizon::Int64 = 20,
     ControlHorizon::Int64 = 3, optimizer=Ipopt.Optimizer)::SEIR_MPC
 
     return initSEIR_MPC(SEIR_params, callback=callback, PredHorizon = PredHorizon, ControlHorizon = ControlHorizon,
-        InfWeight=pomdp.inf_loss, ExpWeight=pomdp.inf_loss, TestWeight=pomdp.test_loss, TestRateWeight=pomdp.testrate_loss, optimizer=optimizer, test_period=pomdp.test_period)
+        InfWeight=params.inf_loss, ExpWeight=params.inf_loss, TestWeight=params.test_loss, TestRateWeight=params.testrate_loss, optimizer=optimizer, test_period=params.test_period)
 end
 
 function SetIC!(mpc::MPC, state::State)
@@ -254,7 +251,7 @@ function SetIC!(mpc::MPC, state::State)
 
 end
 
-function OptimalAction(mpc::SIR_MPC, state::State)
+function OptimalAction(mpc::MPC, state::State)
 
     SetIC!(mpc, state)
 
@@ -265,20 +262,10 @@ function OptimalAction(mpc::SIR_MPC, state::State)
     return JuMP.value.(model[:T])[1:mpc.ControlHorizon]
 end
 
-function OptimalAction(mpc::SEIR_MPC, state::State)
+OptimalAction(params::Params, mpc::MPC, s::State) = OptimalAction(mpc, s)
+OptimalAction(params::Params, mpc::MPC, pc::ParticleCollection) = OptimalAction(mpc,mean(pc,params))
 
-    SetIC!(mpc, state)
-
-    model = mpc.model
-
-    optimize!(model)
-
-    return JuMP.value.(model[:T])[1:mpc.ControlHorizon]
-end
-
-OptimalAction(pomdp::Params, mpc::MPC, pc::ParticleCollection) = OptimalAction(mpc,mean(pc,pomdp))
-
-function Simulate(T::Int, state::State, params::Params, mpc::MPC)::SimHist
+function Simulate(T::Int, state::State, params::Params, mpc::MPC)
     susHist = zeros(Int,T)
     infHist = zeros(Int,T)
     recHist = zeros(Int,T)
@@ -291,14 +278,14 @@ function Simulate(T::Int, state::State, params::Params, mpc::MPC)::SimHist
     end
 
     # actions = nothing
-    for day in ProgressBar(1:T)
+    @showprogress for day in 1:T
 
         # if ((day-1) % mpc.ControlHorizon) == 0
         #     actions = OptimalAction(mpc, state) |> reverse
         # end
         # action = Action(pop!(actions))
-        if (day-1)%pomdp.test_period == 0
-            action = Action(first(OptimalAction(pomdp, mpc, b)))
+        if (day-1)%params.test_period == 0
+            action = Action(first(OptimalAction(params, mpc, state)))
         else
             action = actionHist[day-1]
         end
@@ -317,11 +304,12 @@ function Simulate(T::Int, state::State, params::Params, mpc::MPC)::SimHist
         state = sp
     end
 
-    return SimHist(susHist, infHist, recHist, state.N, T, testHist, actionHist, rewardHist, Vector{ParticleCollection}[])
+    sim_hist = SimHist(susHist, infHist, recHist, state.N, T, testHist, actionHist, rewardHist, Vector{ParticleCollection}[])
+    return sim_hist, actionHist
 end
 
-function Simulate(T::Int, state::State, b0::ParticleCollection, pomdp::Params, mpc::MPC)
-    upd = BootstrapFilter(unity_test_period(pomdp), n_particles(b0))
+function Simulate(T::Int, state::State, b0::ParticleCollection, params::Params, mpc::MPC)
+    upd = BootstrapFilter(unity_test_period(params), n_particles(b0))
     susHist = zeros(Int,T)
     infHist = zeros(Int,T)
     recHist = zeros(Int,T)
@@ -336,15 +324,15 @@ function Simulate(T::Int, state::State, b0::ParticleCollection, pomdp::Params, m
 
     b = b0
     # actions = nothing
-    for day in ProgressBar(1:T)
+    @showprogress for day in 1:T
 
         # if ((day-1) % mpc.ControlHorizon) == 0
-        #     actions = OptimalAction(pomdp, mpc, b) |> reverse
+        #     actions = OptimalAction(params, mpc, b) |> reverse
         # end
         # action = Action(pop!(actions))
 
-        if (day-1)%pomdp.test_period == 0
-            action = Action(first(OptimalAction(pomdp, mpc, b)))
+        if (day-1)%params.test_period == 0
+            action = Action(first(OptimalAction(params, mpc, b)))
         else
             action = actionHist[day-1]
         end
@@ -356,13 +344,14 @@ function Simulate(T::Int, state::State, b0::ParticleCollection, pomdp::Params, m
         push!(beliefHist, b)
 
         # state, new_infections, pos_tests = SimStep(state, params, action, state_only=false)
-        state,o,r = pomdp.interface.gen(pomdp, state, action)
+        state,o,r = params.interface.gen(params, state, action)
         b = update(upd, b, action, o)
         testHist[day] = sum(o)
         rewardHist[day] = r
     end
 
-    return SimHist(susHist, infHist, recHist, state.N, T, testHist, actionHist, rewardHist, beliefHist)
+    sim_hist = SimHist(susHist, infHist, recHist, state.N, T, testHist, actionHist, rewardHist, beliefHist)
+    return sim_hist, actionHist
 end
 
 

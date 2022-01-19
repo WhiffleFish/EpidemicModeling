@@ -1,3 +1,7 @@
-include("/Users/tyler/Documents/code/EpidemicModeling/test/InfectionSimTest.jl")
-include("/Users/tyler/Documents/code/EpidemicModeling/test/ODETest.jl")
-include("/Users/tyler/Documents/code/EpidemicModeling/test/MPCtest.jl")
+using Test
+using EpidemicModeling
+using Distributions
+
+include("InfectionSimTest.jl")
+include("ODETest.jl")
+include("MPCtest.jl")

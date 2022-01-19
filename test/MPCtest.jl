@@ -1,8 +1,3 @@
-include("/Users/tyler/Documents/code/EpidemicModeling/src/InfectionSim.jl")
-include("/Users/tyler/Documents/code/EpidemicModeling/src/ODEFit.jl")
-include("/Users/tyler/Documents/code/EpidemicModeling/src/MPC.jl")
-
-
 param = initParams(
     symptomatic_isolation_prob = 0.95,
     asymptomatic_prob = 0.50,
@@ -24,7 +19,7 @@ SEIRmpc = initSEIR_MPC(
 
 T = 150
 state = initState(Normal(10,0), param)
-simHist, actionHist = MPCSimulate(T, state, param, SEIRmpc)
+simHist, actionHist = Simulate(T, state, param, SEIRmpc)
 
 l = @layout [a;b]
 p1 = plot(simHist.inf./simHist.N, label="")

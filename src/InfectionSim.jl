@@ -1,10 +1,3 @@
-using Random, Distributions, Plots, Parameters, POMDPs, POMDPModelTools
-using ParticleFilters
-import Plots.plot
-import CSV.File
-import DataFrames.DataFrame
-
-
 """
 Fit Distributions to MC sim data for secondary infections per index case as a function of infection age
 
@@ -255,9 +248,9 @@ Simulation History
 - `incident::Array{Int, 1}` = nothing - Incident Infections need not always be recorded
 """
 @with_kw struct SimHist
-    sus::Array{Int, 1} # Susceptible Population History
-    inf::Array{Int, 1} # Infected Population History
-    rec::Array{Int, 1} # Recovered Population History
+    sus::Vector{Int} # Susceptible Population History
+    inf::Vector{Int} # Infected Population History
+    rec::Vector{Int} # Recovered Population History
     N::Int # Total Population
     T::Int # Simulation Time
     pos_test::Vector{Int} = Int[]
@@ -378,8 +371,8 @@ function UpdateIsolations(state::State, params::Params, action::Action; ret_test
     state.Tests = circshift(state.Tests,(-1,1))
 
     # Tests and infection ages do not roll back to beginning; clear last row and first column
-    state.Tests[:,1] *= 0
-    state.Tests[end,:] *= 0
+    state.Tests[:,1] .= 0
+    state.Tests[end,:] .= 0
 
     return ret_tests ? (state, pos_tests) : state
 end
@@ -614,9 +607,9 @@ end
 - `symptomatic_isolation_prob::Float64=0.95`: Probability that individual isolates upon becoming symptomatic
 - `asymptomatic_prob::Float64=0.40`: Probability that individual becomes symptomatic by infection age
 - `LOD::Real=6`: Surveillance Test Limit of Detection (Log Scale).
-- `infections_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/Sample50.csv"`: Path to csv containing MC simulations for daily individual infections.
+- `infections_path::String="data/Sample50.csv"`: Path to csv containing MC simulations for daily individual infections.
 - `sample_size::Int=50`: Sample size for `infections_path` csv where row entry is average infections for given sample size.
-- `viral_loads_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/raw_viral_load.csv"`: Path to csv containing viral load trajectories (cp/ml) tabulated on a daily basis for each individual.
+- `viral_loads_path::String="data/raw_viral_load.csv"`: Path to csv containing viral load trajectories (cp/ml) tabulated on a daily basis for each individual.
 - `horizon::Int=14`: Number of days in infection age before individual is considered naturally recovered and completely uninfectious.
 ...
 """
@@ -633,9 +626,9 @@ function initParams(;
     symptomatic_isolation_prob::Float64=0.95,
     asymptomatic_prob::Float64=0.40,
     LOD::Real=6,
-    infections_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/Sample50.csv",
+    infections_path::String=joinpath(@__DIR__, "data", "Sample50.csv"),
     sample_size::Int=50,
-    viral_loads_path::String="/Users/tyler/Documents/code/EpidemicModeling/data/raw_viral_load.csv",
+    viral_loads_path::String=joinpath(@__DIR__, "data", "raw_viral_load.csv"),
     horizon::Int=14,
     test_period::Int=1
     )::Params
@@ -647,7 +640,7 @@ function initParams(;
     pos_test_probs = [prop_above_LOD(viral_loads,day,LOD) for day in 1:horizon]
     symptom_dist = LogNormal(1.644,0.363);
 
-    if n_obs <= 0
+    if n_obs ≤ 0
         interface = ContinuousSolverInterface(actions, ContinuousObservation, ContinuousGen)
     else
         interface = DiscreteSolverInterface(actions, DiscreteObservation, DiscreteGen, c, n_obs)
@@ -686,7 +679,7 @@ function initState(I, params::Params, rng::AbstractRNG=Random.GLOBAL_RNG)::State
         I0 = round.(Int,rand(rng, truncated(I,0,Inf),horizon))
         @assert sum(I0) <= N # Ensure Sampled infected is not greater than total population
     elseif isa(I, Array{Int, 1})
-        @assert all(I .>= 0 )
+        @assert all(≥(0), I)
         @assert sum(I) <= N
         I0 = I
     elseif isa(I, Int)
