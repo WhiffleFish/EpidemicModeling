@@ -10,9 +10,9 @@ SEIRres, SEIRp = FitRandControlledEnsemble(:SEIR, 30, 500, param, show_trace=tru
 SIRmpc = initSIR_MPC(SIRp)
 SEIRmpc = initSEIR_MPC(
     SEIRp,
-    callback=false,
-    ControlHorizon=1,
-    TestWeight=2.0,
+    callback = false,
+    ControlHorizon = 1,
+    TestWeight = 2.0,
     TestRateWeight = 50.0,
     PredHorizon=30
 )
@@ -20,6 +20,7 @@ SEIRmpc = initSEIR_MPC(
 T = 150
 state = initState(Normal(10,0), param)
 simHist, actionHist = Simulate(T, state, param, SEIRmpc)
+actionHist = getfield.(actionHist, :testing_prop)
 
 l = @layout [a;b]
 p1 = plot(simHist.inf./simHist.N, label="")

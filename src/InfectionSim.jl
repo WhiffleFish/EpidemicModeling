@@ -43,7 +43,7 @@ Proportion of infectious population above some limit of detection from MC simula
 - `LOD::Real` - Limit of detection (Log scale: ``10^x \\rightarrow x``)
 """
 function prop_above_LOD(df::DataFrame, day::Int, LOD::Real)::Float64
-    sum(df[!,day] .> LOD)/size(df)[1]
+    sum(df[!,day] .> LOD)/size(df,1)
 end
 
 
@@ -92,33 +92,33 @@ Base.zero(Action) = Action(0.0)
 """
 # Arguments
 - `S::Int` - Current Susceptible Population
-- `I::Array{Int,1}` - Current Infected Population
+- `I::Vector{Int}` - Current Infected Population
 - `R::Int` - Current Recovered Population
 - `N::Int` - Total Population
-- `Tests::Array{Int,2}` - Array for which people belonging to array element ``T_{i,j}`` are ``i-1`` days away
+- `Tests::Matrix{Int}` - Array for which people belonging to array element ``T_{i,j}`` are ``i-1`` days away
     from receiving positive test and have infection age ``j``
 """
 mutable struct State
     S::Int # Current Susceptible Population
-    I::Array{Int,1} # Current Infected Population
+    I::Vector{Int} # Current Infected Population
     R::Int # Current Recovered Population
     N::Int # Total Population - move to params
-    Tests::Array{Int,2} # Rows: Days from receiving test result; Columns: Infection Age
+    Tests::Matrix{Int} # Rows: Days from receiving test result; Columns: Infection Age
     prev_action::Action
 end
 
 abstract type SolverInterface end
 
-struct ContinuousSolverInterface <: SolverInterface
+struct ContinuousSolverInterface{O<:Function,G<:Function} <: SolverInterface
     actions::Vector{Action}
-    observation::Function
-    gen::Function
+    observation::O
+    gen::G
 end
 
-struct DiscreteSolverInterface <: SolverInterface
+struct DiscreteSolverInterface{O<:Function,G<:Function} <: SolverInterface
     actions::Vector{Action}
-    observation::Function
-    gen::Function
+    observation::O
+    gen::G
     c::Float64
     n_obs::Int
 end
@@ -137,10 +137,10 @@ end
 - `discount::Float64=0.95` - POMDP discount factor
 - `interface::SolverInterface` - Used for discrete/continuous observations/gen
 """
-@with_kw struct Params <: POMDP{State, Action, Int64} # state::State, action::Action, observation::Int64 - number of pos tests
-    symptom_dist::Distribution
-    interface::SolverInterface
-    Infdistributions::Array{UnivariateDistribution,1}
+@with_kw struct Params{D<:Distribution, IF<:SolverInterface} <: POMDP{State, Action, Int64} # state::State, action::Action, observation::Int64 - number of pos tests
+    symptom_dist::D
+    interface::IF
+    Infdistributions::Vector{UnivariateDistribution}
     symptomatic_isolation_prob::Float64 = 1.0
     asymptomatic_prob::Float64 = 0.0
     pos_test_probs::Array{Float64,1} = zeros(length(Infdistributions)) # Default to no testing
@@ -228,9 +228,12 @@ function DiscreteObservation(m::Params, state::State, a::Action)
     if mean(continuous_dist) ≈ 0.0
         return SparseCat(collect(1:n_obs), vcat(1.0, zeros(Float64, n_obs-1)))
     end
-    probs = [cdf(continuous_dist,bin_edges[idx+1])-cdf(continuous_dist,bin_edges[idx]) for idx in eachindex(bin_edges[1:end-1])]
-    probs = probs./sum(probs)
-    @assert all(probs .>= 0.0)
+    probs = [
+        cdf(continuous_dist,bin_edges[idx+1])-cdf(continuous_dist,bin_edges[idx])
+        for idx in eachindex(bin_edges[1:end-1])
+    ]
+    probs ./= sum(probs)
+    @assert all(≥(0.), probs)
     # return SparseCat(observations(m), probs)
     return SparseCat(collect(1:n_obs), probs)
 end
@@ -323,7 +326,7 @@ function PositiveTests(state::State, params::Params, action::Action)::Vector{Int
     pos_tests = zeros(Int,length(params.pos_test_probs))
 
     for (i,inf) in enumerate(state.I)
-        num_already_tested = sum(state.Tests[:,i])
+        num_already_tested = sum(@view state.Tests[:,i])
         num_tested = floor(Int,(inf-num_already_tested)*action.testing_prop)
         pos_tests[i] = rand(Binomial(num_tested,params.pos_test_probs[i]))
     end
@@ -356,14 +359,15 @@ function UpdateIsolations(state::State, params::Params, action::Action; ret_test
     state.R += sum(sympt)
     state.I -= sympt
 
-    state.Tests[end,:] = pos_tests
+    state.Tests[end,:] .= pos_tests
 
-    state.Tests = (1 .- sympt_prop)'.*state.Tests |> x -> floor.(Int,x)
+    tests = (1 .- sympt_prop)' .* state.Tests
+    state.Tests .= floor.(Int, tests)
 
-    state.R += sum(state.Tests[1,:])
-    state.I -= state.Tests[1,:]
+    state.R += sum(@view state.Tests[1,:])
+    @views state.I .-= state.Tests[1,:]
 
-    @assert all(state.I .>= 0)
+    @assert all(≥(0), state.I)
 
     # Progress testing state forward
     # People k days from receiving test back are now k-1 days from receiving test
@@ -678,7 +682,7 @@ function initState(I, params::Params, rng::AbstractRNG=Random.GLOBAL_RNG)::State
     if isa(I, Distribution)
         I0 = round.(Int,rand(rng, truncated(I,0,Inf),horizon))
         @assert sum(I0) <= N # Ensure Sampled infected is not greater than total population
-    elseif isa(I, Array{Int, 1})
+    elseif isa(I, Vector{Int})
         @assert all(≥(0), I)
         @assert sum(I) <= N
         I0 = I

@@ -1,5 +1,3 @@
-using POMCPOW
-
 function POMDPs.gen(pomdp::Params, s::State, a::Action, rng::AbstractRNG=Random.GLOBAL_RNG)
     rsum = 0.0
     o = nothing

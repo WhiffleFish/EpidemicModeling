@@ -256,7 +256,7 @@ end
 
 """
 # Arguments
-- `p::Vector{Float64}` - Vector of parameters ``\\alpha, \\beta`` for SIR ODE
+- `p::Vector{Float64}` - Vector of parameters α, β for SIR ODE
 - `LossCalcParams::Dict`
 """
 function SIR_param_loss(p::Vector{Float64}, LossCalcParams::Dict)::Float64
