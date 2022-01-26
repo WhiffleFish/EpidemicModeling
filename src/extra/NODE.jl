@@ -28,7 +28,7 @@ end
 
 
 function GetICs(params::Params,N=1_000)::Vector{State}
-    return [initState(params) for _ in 1:N]
+    return [State(params) for _ in 1:N]
 end
 
 

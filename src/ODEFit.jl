@@ -98,7 +98,7 @@ end
 - `x` - Output Data
 - `ref_data` - Reference Data
 """
-function SIR_loss(x, ref_data)::Float64
+function SIR_loss(x, ref_data)
     sum(abs2, Array(x) .- ref_data)
 end
 
@@ -110,9 +110,9 @@ end
 """
 function SEIR_loss(x, ref_data)::Float64
     L = zeros(3,size(ref_data,2))
-    L[1,:] = x[1,:]
-    L[2,:] = sum(x[2:3,:], dims=1)[1,:]
-    L[3,:] = x[4,:]
+    @views L[1,:] .= x[1,:]
+    @views L[2,:] .= sum(x[2:3,:], dims=1)[1,:]
+    @views L[3,:] .= x[4,:]
     sum(abs2, L .- ref_data)
 end
 
@@ -143,7 +143,7 @@ function FitModel(kind::Symbol, simHist::SimHist)
 
     result = Optim.optimize(objective, p, NelderMead())
 
-    return result, Optim.minimizer(result)
+    return result, Tuple(Optim.minimizer(result))
 end
 
 
@@ -199,7 +199,7 @@ function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Para
         throw(DomainError("Unrecognized model kind. Must be :SIR or :SEIR"))
     end
 
-    return result, Optim.minimizer(result)
+    return result, Tuple(Optim.minimizer(result))
 end
 
 
@@ -250,7 +250,7 @@ function FitRandControlledEnsemble(kind::Symbol, T::Int, trajectories::Int64, pa
         throw(DomainError("Unrecognized model kind. Must be :SIR or :SEIR"))
     end
 
-    return result, Optim.minimizer(result)
+    return result, Tuple(Optim.minimizer(result))
 end
 
 
@@ -337,14 +337,14 @@ function toSIR(sol)::Array{Float64,2}
 
     elseif syms == [:S, :E, :I, :R]
         arr = zeros(3, size(sol,2))
-        arr[[1,3],:] = sol[[1,4],:]
-        arr[2,:] = sol[2,:] .+ sol[3,:]
+        @views arr[[1,3],:] .= sol[[1,4],:]
+        @views arr[2,:] .= sol[2,:] .+ sol[3,:]
         return arr
 
     elseif syms == [:S, :E, :I, :R, :T]
         arr = zeros(3, size(sol,2))
-        arr[[1,3],:] = sol[[1,4],:]
-        arr[2,:] = sol[2,:] .+ sol[3,:]
+        @views arr[[1,3],:] .= sol[[1,4],:]
+        @views arr[2,:] .= sol[2,:] .+ sol[3,:]
         return arr
     else
         error("Unknown Compartmental Solution Type")

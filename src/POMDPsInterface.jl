@@ -23,7 +23,7 @@ function Simulate(T::Int, state::State, b::ParticleCollection{State}, pomdp::Par
     testHist = zeros(Int,T)
     actionHist = zeros(Action,T)
     rewardHist = zeros(Float64,T)
-    beliefHist = ParticleCollection{State}[]
+    beliefHist = Vector{ParticleCollection{State}}(undef, T)
 
     single_step_pomdp = unity_test_period(pomdp)
     upd = BootstrapFilter(single_step_pomdp, n_particles(b))
@@ -40,7 +40,7 @@ function Simulate(T::Int, state::State, b::ParticleCollection{State}, pomdp::Par
         infHist[day] = sum(state.I)
         recHist[day] = state.R
         actionHist[day] = action
-        push!(beliefHist, b)
+        beliefHist[day] = b
 
         state, o, r = POMDPs.gen(single_step_pomdp, state, action)
         b = update(upd, b, action, o)
@@ -48,5 +48,5 @@ function Simulate(T::Int, state::State, b::ParticleCollection{State}, pomdp::Par
         rewardHist[day] = r
         testHist[day] = sum(o)
     end
-    return SimHist(susHist, infHist, recHist, state.N, T, testHist, actionHist, rewardHist, beliefHist)
+    return SimHist(susHist, infHist, recHist, pomdp.N, T, testHist, actionHist, rewardHist, beliefHist)
 end

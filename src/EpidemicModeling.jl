@@ -14,7 +14,7 @@ import DataFrames.DataFrame
 
 include("InfectionSim.jl")
 export initParams, Params, Action, State, Simulate, plotHist
-export initState, initSIR, initSEIR
+export initSIR, initSEIR
 
 
 using DifferentialEquations
@@ -33,6 +33,6 @@ using ProgressMeter
 
 include("MPC.jl")
 export FitRandControlledEnsemble
-export initSIR_MPC, initSEIR_MPC
+export MPC
 
 end # module

@@ -11,7 +11,7 @@ param = initParams(
 
 println("\nSINGLE SIR FIT...\n")
 
-state = initState(fill(10_000,14), param)
+state = State(fill(10_000,14), param)
 action = Action(0.0)
 simHist_SingleSIR = Simulate(T, state, param, action)
 
@@ -33,7 +33,7 @@ println(res)
 
 println("\nSINGLE SEIR FIT...\n")
 
-state = initState(param)
+state = State(param)
 action = Action(0.0)
 simHist = Simulate(T, state, param, action)
 
@@ -58,7 +58,7 @@ println(res)
 println("\nENSEMBLE SIR FIT...\n")
 
 # Generate Data With random starting parameters
-simHist = Simulate(T, initState(param), param, action)
+simHist = Simulate(T, State(param), param, action)
 
 res, p = FitRandEnsemble(:SIR, T, N, param, action)
 

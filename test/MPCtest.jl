@@ -4,11 +4,11 @@ param = initParams(
     LOD = 5
 )
 
-SIRres, SIRp = FitRandControlledEnsemble(:SIR, 30, 500, param, show_trace=true);
+SIRres, SIRp = FitRandControlledEnsemble(:SIR, 30, 500, param, show_trace=true)
 SEIRres, SEIRp = FitRandControlledEnsemble(:SEIR, 30, 500, param, show_trace=true)
 
-SIRmpc = initSIR_MPC(SIRp)
-SEIRmpc = initSEIR_MPC(
+SIRmpc = MPC(SIRp)
+SEIRmpc = MPC(
     SEIRp,
     callback = false,
     ControlHorizon = 1,
@@ -18,7 +18,7 @@ SEIRmpc = initSEIR_MPC(
 )
 
 T = 150
-state = initState(Normal(10,0), param)
+state = State(Normal(10,0), param)
 simHist, actionHist = Simulate(T, state, param, SEIRmpc)
 actionHist = getfield.(actionHist, :testing_prop)
 

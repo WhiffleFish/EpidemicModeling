@@ -21,7 +21,7 @@ function FitInfectionDistributions(df::DataFrame, horizon::Int=14, sample_size::
                     push!(distributions, Gamma(1/sample_size, β*sample_size))
                 catch e # If exponential doesn't work either, use dirac 0 dist
                     if isa(e, ArgumentError)
-                        push!(distributions, Normal(0,0))
+                        push!(distributions, Gamma(1e-100,1e-100))
                     else
                         throw(e)
                     end
@@ -83,7 +83,7 @@ Action input to influence epidemic simulation dynamics
 - `testing_prop::Real` - Proportion of population to be tested on one day
     - Simplification of typical "x-days between tests per person"  action strategy due to non agent-based model
 """
-mutable struct Action
+struct Action
     testing_prop::Float64
 end
 
@@ -140,10 +140,10 @@ end
 @with_kw struct Params{D<:Distribution, IF<:SolverInterface} <: POMDP{State, Action, Int64} # state::State, action::Action, observation::Int64 - number of pos tests
     symptom_dist::D
     interface::IF
-    Infdistributions::Vector{UnivariateDistribution}
+    Infdistributions::Vector{Gamma{Float64}}
     symptomatic_isolation_prob::Float64 = 1.0
     asymptomatic_prob::Float64 = 0.0
-    pos_test_probs::Array{Float64,1} = zeros(length(Infdistributions)) # Default to no testing
+    pos_test_probs::Vector{Float64} = zeros(length(Infdistributions)) # Default to no testing
     test_delay::Int = 0
     N::Int = 1_000_000
     discount::Float64 = 0.95
@@ -160,7 +160,7 @@ function reward(m::Params, s::State, a::Action, sp::State)
 end
 
 function ContinuousGen(m::Params, s::State, a::Action, rng::AbstractRNG=Random.GLOBAL_RNG)
-    sp, new_inf, o = SimStep(copy(s), m, a, state_only=false)
+    sp, new_inf, o = SimStep(copy(s), m, a)
     r = reward(m, s, a, sp)
     o = sum(o)
 
@@ -172,7 +172,7 @@ function ContinuousObservation(m::Params, state::State, a::Action)
     tot_variance = 0.0
 
     for (i,inf) in enumerate(state.I)
-        num_already_tested = sum(state.Tests[:,i])
+        num_already_tested = sum(@view state.Tests[:,i])
         num_tested = floor(Int,(inf-num_already_tested)*a.testing_prop)
         dist = Binomial(num_tested,m.pos_test_probs[i])
         tot_mean += mean(dist)
@@ -198,7 +198,7 @@ function get_bins(c::Float64=2.0, n_obs::Int=10)
 end
 
 function DiscreteGen(m::Params, s::State, a::Action, rng::AbstractRNG)
-    sp, new_inf, o = SimStep(copy(s), m, a, state_only=false)
+    sp, new_inf, o = SimStep(copy(s), m, a)
     r = reward(m, s, a, sp)
     o = expansion_map(sum(o)/m.N)
 
@@ -269,14 +269,14 @@ Base.copy(action::Action) = Action([copy(getfield(action,name)) for name ∈ fie
 """
 Convert `simHist` struct to 2-dimentional array - Collapse infected array to sum
 """
-function Array(simHist::SimHist)::Array{Int64,2}
+function Base.Array(simHist::SimHist)::Array{Int64,2}
     hcat(simHist.sus, simHist.inf, simHist.rec) |> transpose |> Array
 end
 
 """
 Convert `State` struct to Vector - Collapse infected array to sum
 """
-function Array(state::State)::Vector{Int64}
+function Base.Array(state::State)::Vector{Int64}
     [state.S, sum(state.I), state.R]
 end
 
@@ -348,13 +348,13 @@ infectious population.
 """
 # Only record number that have taken the test, the number that return postive is
 # Binomial dist, such that s' is stochastic on s.
-function UpdateIsolations(state::State, params::Params, action::Action; ret_tests::Bool=false)
+function UpdateIsolations(state::State, params::Params, action::Action)
 
     sympt = SymptomaticIsolation(state.I, params) # Number of people isolating due to symptoms
     pos_tests = PositiveTests(state, params, action)
 
     sympt_prop = sympt ./ state.I # Symptomatic Isolation Proportion
-    replace!(sympt_prop, NaN=>0)
+    replace!(sympt_prop, NaN=>0.0)
 
     state.R += sum(sympt)
     state.I -= sympt
@@ -378,7 +378,7 @@ function UpdateIsolations(state::State, params::Params, action::Action; ret_test
     state.Tests[:,1] .= 0
     state.Tests[end,:] .= 0
 
-    return ret_tests ? (state, pos_tests) : state
+    return state, pos_tests
 end
 
 
@@ -388,12 +388,11 @@ end
 - `state::State` - Current Sim State
 - `params::Params` - Simulation parameters
 - `action::Action` - Current Sim Action
-- `state_only::Bool=true` (opt) - If `true`, only return state. If `false`, return state, new infections, and positive tests
 """
-function SimStep(state::State, params::Params, action::Action; state_only::Bool=true)
+function SimStep(state::State, params::Params, action::Action)
 
     # Update symptomatic and testing-based isolations
-    state, pos_tests = UpdateIsolations(state, params, action; ret_tests=true)
+    state, pos_tests = UpdateIsolations(state, params, action)
 
     # Incident Infections
     state.R += state.I[end]
@@ -401,13 +400,7 @@ function SimStep(state::State, params::Params, action::Action; state_only::Bool=
     new_infections = IncidentInfections(state, params)
     state.I[1] = new_infections
     state.S -= new_infections
-
-    if state_only
-        return state
-    else
-        return state, new_infections, pos_tests
-    end
-
+    return state, new_infections, pos_tests
 end
 
 
@@ -431,8 +424,7 @@ function Simulate(T::Int, state::State, params::Params, action::Action)::SimHist
         infHist[day] = sum(state.I)
         recHist[day] = state.R
 
-
-        sp, new_infections, pos_tests = SimStep(state, params, action, state_only=false)
+        sp, new_infections, pos_tests = SimStep(state, params, action)
         r = reward(params, state, action,sp)
 
         testHist[day] = sum(pos_tests)
@@ -455,7 +447,7 @@ Run multiple simulations with random initial states but predefined actions
 - `Vector{SimHist}`
 """
 function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, action::Action)::Vector{SimHist}
-    [Simulate(T, initState(params), params, action) for _ in 1:trajectories]
+    [Simulate(T, State(params), params, action) for _ in 1:trajectories]
 end
 
 """
@@ -470,7 +462,7 @@ Run multiple simulations with varying predefined actions and random initial stat
 - `Vector{SimHist}`
 """
 function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, actions::Vector{Action})::Vector{SimHist}
-    [Simulate(T, initState(params), params, actions[i]) for i in 1:trajectories]
+    [Simulate(T, State(params), params, actions[i]) for i in 1:trajectories]
 end
 
 """
@@ -482,7 +474,7 @@ Provided some state initial condition, simulate resulting epidemic and return ve
 """
 function GenSimStates(T::Int, state::State, params::Params; action::Action=Action(0.0))::Vector{State}
     s = copy(state)
-    [copy(SimStep(s, params, action, state_only=true)) for day in 1:T]
+    [copy(first(SimStep(s, params, action))) for day in 1:T]
 end
 
 """
@@ -493,10 +485,10 @@ Provided some state initial conditions, simulate resulting epidemic and return v
 - `action::Action` (opt)
 """
 function GenSimStates(T::Int, states::Vector{State}, params::Params; action::Action=Action(0.0))::Vector{State}
-    svec = Array{State,1}(undef, 0)
+    svec = Vector{State}(undef, 0)
     for state in states
         for day in 1:T
-            push!(svec, copy(SimStep(state, params, action, state_only=true)))
+            push!(svec, copy(first(SimStep(state, params, action))))
         end
     end
     return svec
@@ -506,8 +498,12 @@ function FullArr(state::State, param::Params)::Vector{Float64}
     vcat(state.S,state.I,state.R)./param.N
 end
 
-function FullArrToSIR(arr::Array{Float64,2})::Array{Float64,2}
-    hcat(arr[1,:], reshape(sum(arr[2:15,:],dims=1),size(arr,2)), arr[16,:])'
+function FullArrToSIR(arr::Array{Float64,2})::Matrix{Float64}
+    hcat(
+        view(arr,1,:),
+        reshape(sum(view(arr,2:15,:),dims=1), size(arr,2)),
+        view(arr,16,:)
+    )'
 end
 
 """
@@ -522,7 +518,7 @@ function SimulateFull(T::Int, state::State, params::Params; action::Action=Actio
     StateArr = Array{Float64,2}(undef,16,T)
     StateArr[:,1] = FullArr(s)
     for day in 2:T
-        StateArr[:,day] = FullArr(SimStep(s, params, action, state_only=true))
+        StateArr[:,day] = FullArr(first(SimStep(s, params, action)))
     end
     return StateArr
 end
@@ -533,10 +529,10 @@ Convert Simulation SimulateEnsemble output to 3D Array
 # Arguments
 - `histvec::Vector{SimHist}` - Vector of SimHist structs
 """
-function Array(histvec::Vector{SimHist})::Array{Int64,3}
+function Base.Array(histvec::Vector{SimHist})::Array{Int64,3}
     arr = zeros(Int64, 3, histvec[1].T, length(histvec))
     for i in eachindex(histvec)
-        arr[:,:,i] = Array(histvec[i])
+        arr[:,:,i] .= Array(histvec[i])
     end
     return arr
 end
@@ -676,7 +672,7 @@ end
     - `I::Int` - Take first element of infections array (infection age 0) as given integer
 - `params::Params` - Simulation parameters
 """
-function initState(I, params::Params, rng::AbstractRNG=Random.GLOBAL_RNG)::State
+function State(I, params::Params, rng::AbstractRNG=Random.GLOBAL_RNG)::State
     N = params.N
     horizon = length(params.Infdistributions)
     if isa(I, Distribution)
@@ -713,7 +709,7 @@ Random Initial State using Bayesian Bootstrap / Simplex sampling
 # Arguments
 - `params::Params` - Simulation parameters
 """
-function initState(params::Params, rng=Random.GLOBAL_RNG)::State
+function State(params::Params, rng=Random.GLOBAL_RNG)::State
     N = params.N
     S, inf, R = round.(Int,simplex_sample(3, Float64(N), rng))
 
