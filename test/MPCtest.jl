@@ -1,4 +1,4 @@
-param = initParams(
+param = CovidPOMDP(
     symptomatic_isolation_prob = 0.95,
     asymptomatic_prob = 0.50,
     LOD = 5
@@ -30,6 +30,3 @@ p2 = plot(actionHist, label="", ylabel="Testing Prop")
 plt = plot(p1, p2, layout=l)
 xlabel!("Day")
 display(plt)
-
-# plot(simHist.inf/simHist.N, label="")
-# ylabel!("Infected Proportion")

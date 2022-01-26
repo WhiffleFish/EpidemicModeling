@@ -1,6 +1,6 @@
 T = 20 # Sim Time
 N = 10 # Number of Ensemble MC Sims to fit
-param = initParams(
+param = CovidPOMDP(
     symptomatic_isolation_prob = 0.95,
     asymptomatic_prob = 0.65
 )

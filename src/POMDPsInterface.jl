@@ -1,4 +1,4 @@
-function POMDPs.gen(pomdp::Params, s::State, a::Action, rng::AbstractRNG=Random.GLOBAL_RNG)
+function POMDPs.gen(pomdp::CovidPOMDP, s::State, a::Action, rng::AbstractRNG=Random.GLOBAL_RNG)
     rsum = 0.0
     o = nothing
     for i in 1:pomdp.test_period
@@ -8,15 +8,15 @@ function POMDPs.gen(pomdp::Params, s::State, a::Action, rng::AbstractRNG=Random.
     return (sp=s,o=o,r=rsum)
 end
 
-function POMDPs.observation(pomdp::Params, s::State, a::Action, sp::State)
+function POMDPs.observation(pomdp::CovidPOMDP, s::State, a::Action, sp::State)
     pomdp.interface.observation(pomdp, s, a)
 end
 
-POMDPs.actions(pomdp::Params) = pomdp.interface.actions
+POMDPs.actions(pomdp::CovidPOMDP) = pomdp.interface.actions
 
-POMDPs.discount(pomdp::Params) = pomdp.discount
+POMDPs.discount(pomdp::CovidPOMDP) = pomdp.discount
 
-function Simulate(T::Int, state::State, b::ParticleCollection{State}, pomdp::Params, planner::Policy)
+function Simulate(T::Int, state::State, b::ParticleCollection{State}, pomdp::CovidPOMDP, planner::Policy)
     susHist = zeros(Int,T)
     infHist = zeros(Int,T)
     recHist = zeros(Int,T)

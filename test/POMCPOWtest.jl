@@ -3,7 +3,7 @@ include("/Users/tyler/Documents/code/EpidemicModeling/src/ODEFit.jl")
 include("/Users/tyler/Documents/code/EpidemicModeling/src/POMDPsInterface.jl")
 include("/Users/tyler/Documents/code/EpidemicModeling/src/updater.jl")
 
-pomdp = initParams(inf_loss=100.0, test_loss=1.0, testrate_loss=25.0)
+pomdp = CovidPOMDP(inf_loss=100.0, test_loss=1.0, testrate_loss=25.0)
 
 function POMDPs.initialstate(pomdp::Params, rng::AbstractRNG=Random.GLOBAL_RNG)
      return ImplicitDistribution(initState, Normal(10_000,5_000), pomdp)

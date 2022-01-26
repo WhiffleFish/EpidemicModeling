@@ -6,8 +6,8 @@ Fit Distributions to MC sim data for secondary infections per index case as a fu
 - `horizon::Int=14` - Number of days in infection age before individual is considered naturally recovered and completely uninfectious.
 - `sample_size::Int=50` - Sample size for `infections_path` csv where row entry is average infections for given sample size.
 """
-function FitInfectionDistributions(df::DataFrame, horizon::Int=14, sample_size::Int=50)::Vector{UnivariateDistribution}
-    distributions = []
+function FitInfectionDistributions(df::DataFrame, horizon::Int=14, sample_size::Int=50)
+    distributions = Gamma{Float64}[]
     for day in 1:horizon
         try # Initially try to fit Gamma
             shape, scale = Distributions.params(fit(Gamma, df[!,day]))
@@ -98,7 +98,7 @@ Base.zero(Action) = Action(0.0)
 - `Tests::Matrix{Int}` - Array for which people belonging to array element ``T_{i,j}`` are ``i-1`` days away
     from receiving positive test and have infection age ``j``
 """
-mutable struct State
+struct State
     S::Int # Current Susceptible Population
     I::Vector{Int} # Current Infected Population
     R::Int # Current Recovered Population
@@ -137,37 +137,40 @@ end
 - `discount::Float64=0.95` - POMDP discount factor
 - `interface::SolverInterface` - Used for discrete/continuous observations/gen
 """
-@with_kw struct Params{D<:Distribution, IF<:SolverInterface} <: POMDP{State, Action, Int64} # state::State, action::Action, observation::Int64 - number of pos tests
+struct CovidPOMDP{D<:Distribution, IF<:SolverInterface} <: POMDP{State, Action, Int64}
     symptom_dist::D
     interface::IF
     Infdistributions::Vector{Gamma{Float64}}
-    symptomatic_isolation_prob::Float64 = 1.0
-    asymptomatic_prob::Float64 = 0.0
-    pos_test_probs::Vector{Float64} = zeros(length(Infdistributions)) # Default to no testing
-    test_delay::Int = 0
-    N::Int = 1_000_000
-    discount::Float64 = 0.95
-    inf_loss::Float64 = 1.0
-    test_loss::Float64 = 1.0
-    testrate_loss::Float64 = 0.1
-    test_period::Int = 1
+    symptomatic_isolation_prob::Float64
+    asymptomatic_prob::Float64
+    pos_test_probs::Vector{Float64}
+    test_delay::Int
+    N::Int
+    discount::Float64
+    inf_loss::Float64
+    test_loss::Float64
+    testrate_loss::Float64
+    test_period::Int
 end
 
 ## Continuous
 
-function reward(m::Params, s::State, a::Action, sp::State)
-    return -(m.inf_loss*sum(sp.I)/m.N + m.test_loss*a.testing_prop + m.testrate_loss*abs(a.testing_prop-s.prev_action.testing_prop))
+function reward(m::CovidPOMDP, s::State, a::Action, sp::State)
+    inf_loss = m.inf_loss*sum(sp.I)/m.N
+    test_loss = m.test_loss*a.testing_prop
+    testrate_loss = m.testrate_loss*abs(a.testing_prop-s.prev_action.testing_prop)
+    return -(inf_loss + test_loss + testrate_loss)
 end
 
-function ContinuousGen(m::Params, s::State, a::Action, rng::AbstractRNG=Random.GLOBAL_RNG)
-    sp, new_inf, o = SimStep(copy(s), m, a)
+function ContinuousGen(m::CovidPOMDP, s::State, a::Action, rng::AbstractRNG=Random.GLOBAL_RNG)
+    sp, new_inf, o = SimStep(s, m, a)
     r = reward(m, s, a, sp)
     o = sum(o)
 
     return (sp=sp, o=o, r=r)
 end
 
-function ContinuousObservation(m::Params, state::State, a::Action)
+function ContinuousObservation(m::CovidPOMDP, state::State, a::Action)
     tot_mean = 0.0
     tot_variance = 0.0
 
@@ -197,8 +200,8 @@ function get_bins(c::Float64=2.0, n_obs::Int=10)
     return bin_centers, bin_edges
 end
 
-function DiscreteGen(m::Params, s::State, a::Action, rng::AbstractRNG)
-    sp, new_inf, o = SimStep(copy(s), m, a)
+function DiscreteGen(m::CovidPOMDP, s::State, a::Action, rng::AbstractRNG)
+    sp, new_inf, o = SimStep(s, m, a)
     r = reward(m, s, a, sp)
     o = expansion_map(sum(o)/m.N)
 
@@ -208,7 +211,7 @@ function DiscreteGen(m::Params, s::State, a::Action, rng::AbstractRNG)
     return (sp=sp, o=obs, r=r)
 end
 
-function DiscreteObservation(m::Params, state::State, a::Action)
+function DiscreteObservation(m::CovidPOMDP, state::State, a::Action)
     c = m.interface.c
     n_obs = m.interface.n_obs
     _, bin_edges = get_bins(c, n_obs)
@@ -250,7 +253,7 @@ Simulation History
 - `T::Int` - Simulation Time
 - `incident::Array{Int, 1}` = nothing - Incident Infections need not always be recorded
 """
-@with_kw struct SimHist
+Base.@kwdef struct SimHist
     sus::Vector{Int} # Susceptible Population History
     inf::Vector{Int} # Infected Population History
     rec::Vector{Int} # Recovered Population History
@@ -261,10 +264,6 @@ Simulation History
     rewards::Vector{Float64} = Float64[]
     beliefs::Vector{ParticleCollection{State}} = ParticleCollection{State}[]
 end
-
-
-Base.copy(state::State) = State([copy(getfield(state,name)) for name ∈ fieldnames(State)]...)
-Base.copy(action::Action) = Action([copy(getfield(action,name)) for name ∈ fieldnames(Action)]...)
 
 """
 Convert `simHist` struct to 2-dimentional array - Collapse infected array to sum
@@ -283,14 +282,14 @@ end
 """
 # Arguments
 - `state::State` - Current Sim State
-- `params::Params` - Simulation parameters
+- `params::CovidPOMDP` - Simulation parameters
 """
-function IncidentInfections(state::State, params::Params)::Int64
+function IncidentInfections(params::CovidPOMDP, S::Int, I::Vector{Int}, R::Int)
     infSum = 0
-    for (i, inf) in enumerate(state.I)
-        infSum += rand(RVsum(params.Infdistributions[i],inf))
+    for (i, inf) in enumerate(I)
+        infSum += rand(RVsum(params.Infdistributions[i], inf))
     end
-    susceptible_prop = state.S/(params.N - state.R)
+    susceptible_prop = S/(params.N - R)
 
     return floor(Int, susceptible_prop*infSum)
 end
@@ -299,9 +298,9 @@ end
 """
 # Arguments
 - `I::Array{Int,1}` - Current infectious population vector (divided by infection age)
-- `params::Params` - Simulation parameters
+- `params::CovidPOMDP` - Simulation parameters
 """
-function SymptomaticIsolation(I::Array{Int,1}, params::Params)::Vector{Int64}
+function SymptomaticIsolation(I::Vector{Int}, params::CovidPOMDP)::Vector{Int64}
     isolating = zero(I)
     for (i, inf) in enumerate(I)
         symptomatic_prob = cdf(params.symptom_dist,i) - cdf(params.symptom_dist,i-1)
@@ -315,19 +314,18 @@ end
 """
 # Arguments
 - `state::State` - Current Sim State
-- `params::Params` - Simulation parameters
+- `params::CovidPOMDP` - Simulation parameters
 - `action::Action` - Current Sim Action
 
 # Returns
 - `pos_tests::Vector{Int}` - Vector of positive tests stratified by infection age
 """
-function PositiveTests(state::State, params::Params, action::Action)::Vector{Int64}
-    @assert 0 <= action.testing_prop <= 1
-    pos_tests = zeros(Int,length(params.pos_test_probs))
+function PositiveTests(I::Vector{Int}, tests::Matrix{Int}, params::CovidPOMDP, a::Action)
+    pos_tests = zeros(Int, length(params.pos_test_probs))
 
-    for (i,inf) in enumerate(state.I)
-        num_already_tested = sum(@view state.Tests[:,i])
-        num_tested = floor(Int,(inf-num_already_tested)*action.testing_prop)
+    for (i, inf) in enumerate(I)
+        num_already_tested = sum(@view tests[:,i])
+        num_tested = floor(Int,(inf-num_already_tested)*a.testing_prop)
         pos_tests[i] = rand(Binomial(num_tested,params.pos_test_probs[i]))
     end
     return pos_tests
@@ -342,43 +340,43 @@ infectious population.
 
 # Arguments
 - `state::State` - Current Sim State
-- `params::Params` - Simulation parameters
+- `params::CovidPOMDP` - Simulation parameters
 - `action::Action` - Current Sim Action
 - `ret_tests::Bool=false` (opt) - return both new state and positive tests
 """
 # Only record number that have taken the test, the number that return postive is
 # Binomial dist, such that s' is stochastic on s.
-function UpdateIsolations(state::State, params::Params, action::Action)
+# requires: I, R, tests
+function UpdateIsolations(params::CovidPOMDP, I, R, tests, a::Action)
 
-    sympt = SymptomaticIsolation(state.I, params) # Number of people isolating due to symptoms
-    pos_tests = PositiveTests(state, params, action)
+    sympt = SymptomaticIsolation(I, params) # Number of people isolating due to symptoms
+    pos_tests = PositiveTests(I, tests, params, a)
 
-    sympt_prop = sympt ./ state.I # Symptomatic Isolation Proportion
+    sympt_prop = sympt ./ I # Symptomatic Isolation Proportion
     replace!(sympt_prop, NaN=>0.0)
 
-    state.R += sum(sympt)
-    state.I -= sympt
+    R += sum(sympt)
+    I -= sympt
 
-    state.Tests[end,:] .= pos_tests
+    tests[end,:] .= pos_tests
 
-    tests = (1 .- sympt_prop)' .* state.Tests
-    state.Tests .= floor.(Int, tests)
+    @. tests = floor(Int, (1 - sympt_prop)' * tests)
 
-    state.R += sum(@view state.Tests[1,:])
-    @views state.I .-= state.Tests[1,:]
+    R += sum(@view tests[1,:])
+    @views I .-= tests[1,:]
 
-    @assert all(≥(0), state.I)
+    @assert all(≥(0), I)
 
     # Progress testing state forward
     # People k days from receiving test back are now k-1 days from receiving test
     # Tested individuals with infection age t move to infection age t + 1
-    state.Tests = circshift(state.Tests,(-1,1))
+    tests = circshift(tests,(-1,1))
 
     # Tests and infection ages do not roll back to beginning; clear last row and first column
-    state.Tests[:,1] .= 0
-    state.Tests[end,:] .= 0
+    tests[:,1] .= 0
+    tests[end,:] .= 0
 
-    return state, pos_tests
+    return I, R, tests, pos_tests
 end
 
 
@@ -386,21 +384,23 @@ end
 """
 # Arguments
 - `state::State` - Current Sim State
-- `params::Params` - Simulation parameters
+- `params::CovidPOMDP` - Simulation parameters
 - `action::Action` - Current Sim Action
 """
-function SimStep(state::State, params::Params, action::Action)
+function SimStep(state::State, params::CovidPOMDP, a::Action)
+    (;S, I, R, N, Tests, prev_action) = state
 
     # Update symptomatic and testing-based isolations
-    state, pos_tests = UpdateIsolations(state, params, action)
+    I, R, Tests, pos_tests = UpdateIsolations(params, I, R, Tests, a)
 
     # Incident Infections
-    state.R += state.I[end]
-    state.I = circshift(state.I,1)
-    new_infections = IncidentInfections(state, params)
-    state.I[1] = new_infections
-    state.S -= new_infections
-    return state, new_infections, pos_tests
+    R += I[end]
+    I = circshift(I, 1)
+    new_infections = IncidentInfections(params, S, I, R)
+    I[1] = new_infections
+    S -= new_infections
+    sp = State(S, I, R, N, Tests, a)
+    return sp, new_infections, pos_tests
 end
 
 
@@ -408,15 +408,15 @@ end
 # Arguments
 - `T::Int` - Simulation duration (days)
 - `state::State` - Current Sim State
-- `params::Params` - Simulation parameters
+- `params::CovidPOMDP` - Simulation parameters
 - `action::Action` - Current Sim Action
 """
-function Simulate(T::Int, state::State, params::Params, action::Action)::SimHist
+function Simulate(T::Int, state::State, params::CovidPOMDP, action::Action)::SimHist
     susHist = zeros(Int,T)
     infHist = zeros(Int,T)
     recHist = zeros(Int,T)
     testHist = zeros(Int,T)
-    actionHist = [action for _  in 1:T]
+    actionHist = fill(action, T)
     rewardHist = zeros(Float64, T)
 
     for day in 1:T
@@ -440,13 +440,13 @@ Run multiple simulations with random initial states but predefined actions
 # Arguments
 - `T::Int64` - Simulation Time (days)
 - `trajectories::Int64` - Total number of simulations
-- `params::Params` - Simulation Parameters
+- `params::CovidPOMDP` - Simulation Parameters
 - `action::Action` - Testing Action
 - `N::Int=1_000_000` - (opt) Population Size
 # Return
 - `Vector{SimHist}`
 """
-function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, action::Action)::Vector{SimHist}
+function SimulateEnsemble(T::Int64, trajectories::Int64, params::CovidPOMDP, action::Action)::Vector{SimHist}
     [Simulate(T, State(params), params, action) for _ in 1:trajectories]
 end
 
@@ -455,13 +455,13 @@ Run multiple simulations with varying predefined actions and random initial stat
 # Arguments
 - `T::Int64` - Simulation Time (days)
 - `trajectories::Int64` - Total number of simulations
-- `params::Params` - Simulation Parameters
+- `params::CovidPOMDP` - Simulation Parameters
 - `actions::Vector{Action}` -
 - `N::Int=1_000_000` - (opt) Population Size
 # Return
 - `Vector{SimHist}`
 """
-function SimulateEnsemble(T::Int64, trajectories::Int64, params::Params, actions::Vector{Action})::Vector{SimHist}
+function SimulateEnsemble(T::Int64, trajectories::Int64, params::CovidPOMDP, actions::Vector{Action})::Vector{SimHist}
     [Simulate(T, State(params), params, actions[i]) for i in 1:trajectories]
 end
 
@@ -469,32 +469,31 @@ end
 Provided some state initial condition, simulate resulting epidemic and return vector of all intermediary states
 - `T::Int`
 - `state::State`
-- `params::Params`
+- `params::CovidPOMDP`
 - `action::Action` (opt)
 """
-function GenSimStates(T::Int, state::State, params::Params; action::Action=Action(0.0))::Vector{State}
-    s = copy(state)
-    [copy(first(SimStep(s, params, action))) for day in 1:T]
+function GenSimStates(T::Int, state::State, params::CovidPOMDP; action::Action=Action(0.0))::Vector{State}
+    [first(SimStep(s, params, action)) for day in 1:T]
 end
 
 """
 Provided some state initial conditions, simulate resulting epidemic and return vector of all intermediary states
 - `T::Int`
 - `states::Vector{State}`
-- `params::Params`
+- `params::CovidPOMDP`
 - `action::Action` (opt)
 """
-function GenSimStates(T::Int, states::Vector{State}, params::Params; action::Action=Action(0.0))::Vector{State}
+function GenSimStates(T::Int, states::Vector{State}, params::CovidPOMDP; action::Action=Action(0.0))::Vector{State}
     svec = Vector{State}(undef, 0)
     for state in states
         for day in 1:T
-            push!(svec, copy(first(SimStep(state, params, action))))
+            push!(svec, first(SimStep(state, params, action)))
         end
     end
     return svec
 end
 
-function FullArr(state::State, param::Params)::Vector{Float64}
+function FullArr(state::State, param::CovidPOMDP)::Vector{Float64}
     vcat(state.S,state.I,state.R)./param.N
 end
 
@@ -510,11 +509,10 @@ end
 Provided some state initial conditions, simulate resulting epidemic and return vector of all intermediary states
 - `T::Int`
 - `state::State`
-- `params::Params`
+- `params::CovidPOMDP`
 - `action::Action` (opt)
 """
-function SimulateFull(T::Int, state::State, params::Params; action::Action=Action(0.0))::Array{Float64,2}
-    s = copy(state)
+function SimulateFull(T::Int, state::State, params::CovidPOMDP; action::Action=Action(0.0))::Array{Float64,2}
     StateArr = Array{Float64,2}(undef,16,T)
     StateArr[:,1] = FullArr(s)
     for day in 2:T
@@ -576,7 +574,7 @@ function plot(hist::SimHist; prop::Bool=true, kind::Symbol=:line, order::String=
     plotHist(hist, prop=prop, kind=kind, order=order)
 end
 
-function plot(pomdp::Params, hist::SimHist)
+function plot(pomdp::CovidPOMDP, hist::SimHist)
     l = @layout [a;b]
     as = [a.testing_prop for a in hist.actions]
 
@@ -613,32 +611,32 @@ end
 - `horizon::Int=14`: Number of days in infection age before individual is considered naturally recovered and completely uninfectious.
 ...
 """
-function initParams(;
-    test_delay::Int=0,
-    discount::Float64=0.95,
+function CovidPOMDP(;
+    test_delay::Int = 0,
+    discount::Float64 = 0.95,
     actions::Vector{Action} = Action.(0:0.1:1.0),
-    N::Int=1_000_000,
-    c::Float64=2.0,
-    n_obs::Int=0,
+    N::Int = 1_000_000,
+    c::Float64 = 2.0,
+    n_obs::Int = 0,
     inf_loss::Float64 = 50.0,
     test_loss::Float64 = 1.0,
     testrate_loss::Float64 = 0.1,
-    symptomatic_isolation_prob::Float64=0.95,
-    asymptomatic_prob::Float64=0.40,
-    LOD::Real=6,
-    infections_path::String=joinpath(@__DIR__, "data", "Sample50.csv"),
-    sample_size::Int=50,
-    viral_loads_path::String=joinpath(@__DIR__, "data", "raw_viral_load.csv"),
-    horizon::Int=14,
-    test_period::Int=1
-    )::Params
+    symptomatic_isolation_prob::Float64 = 0.95,
+    asymptomatic_prob::Float64 = 0.40,
+    LOD::Real = 6,
+    infections_path::String = joinpath(@__DIR__, "data", "Sample50.csv"),
+    sample_size::Int = 50,
+    viral_loads_path::String = joinpath(@__DIR__, "data", "raw_viral_load.csv"),
+    horizon::Int = 14,
+    test_period::Int = 1
+    )
 
     df = File(infections_path) |> DataFrame;
     viral_loads = File(viral_loads_path) |> DataFrame;
 
     infDistributions = FitInfectionDistributions(df, horizon, sample_size)
     pos_test_probs = [prop_above_LOD(viral_loads,day,LOD) for day in 1:horizon]
-    symptom_dist = LogNormal(1.644,0.363);
+    symptom_dist = LogNormal(1.644,0.363)
 
     if n_obs ≤ 0
         interface = ContinuousSolverInterface(actions, ContinuousObservation, ContinuousGen)
@@ -646,22 +644,42 @@ function initParams(;
         interface = DiscreteSolverInterface(actions, DiscreteObservation, DiscreteGen, c, n_obs)
     end
 
-    return Params(
-        symptom_dist, interface, infDistributions, symptomatic_isolation_prob,
-        asymptomatic_prob, pos_test_probs, test_delay, N, discount,
-        inf_loss, test_loss, testrate_loss, test_period
-        )
+    return CovidPOMDP(
+        symptom_dist,
+        interface,
+        infDistributions,
+        symptomatic_isolation_prob,
+        asymptomatic_prob,
+        pos_test_probs,
+        test_delay,
+        N,
+        discount,
+        inf_loss,
+        test_loss,
+        testrate_loss,
+        test_period
+    )
 end
 
 """
-Take given Params obj and return same Params obj only with test_period changed to 1
+Take given CovidPOMDP obj and return same CovidPOMDP obj only with test_period changed to 1
 """
-function unity_test_period(pomdp::Params)::Params
-    return Params(
-        pomdp.symptom_dist, pomdp.interface, pomdp.Infdistributions, pomdp.symptomatic_isolation_prob,
-        pomdp.asymptomatic_prob, pomdp.pos_test_probs, pomdp.test_delay, pomdp.N, pomdp.discount,
-        pomdp.inf_loss, pomdp.test_loss, pomdp.testrate_loss, 1
-        )
+function unity_test_period(pomdp::CovidPOMDP)::CovidPOMDP
+    return CovidPOMDP(
+        pomdp.symptom_dist,
+        pomdp.interface,
+        pomdp.Infdistributions,
+        pomdp.symptomatic_isolation_prob,
+        pomdp.asymptomatic_prob,
+        pomdp.pos_test_probs,
+        pomdp.test_delay,
+        pomdp.N,
+        pomdp.discount,
+        pomdp.inf_loss,
+        pomdp.test_loss,
+        pomdp.testrate_loss,
+        1
+    )
 end
 
 """
@@ -670,9 +688,9 @@ end
     - `I::Distribution` - Sample all elements in Infections array from given distribution
     - `I::Array{Int,1}` - Take given array as initial infections array
     - `I::Int` - Take first element of infections array (infection age 0) as given integer
-- `params::Params` - Simulation parameters
+- `params::CovidPOMDP` - Simulation parameters
 """
-function State(I, params::Params, rng::AbstractRNG=Random.GLOBAL_RNG)::State
+function State(I, params::CovidPOMDP, rng::AbstractRNG=Random.GLOBAL_RNG)::State
     N = params.N
     horizon = length(params.Infdistributions)
     if isa(I, Distribution)
@@ -696,7 +714,7 @@ function State(I, params::Params, rng::AbstractRNG=Random.GLOBAL_RNG)::State
     return State(S0, I0, R0, N, tests, Action(0.0))
 end
 
-function simplex_sample(N::Int, m::Float64, rng=Random.GLOBAL_RNG)
+function simplex_sample(N::Int, m::Float64, rng::AbstractRNG=Random.GLOBAL_RNG)
     v = rand(rng, N-1)*m
     push!(v, 0, m)
     sort!(v)
@@ -707,9 +725,9 @@ end
 """
 Random Initial State using Bayesian Bootstrap / Simplex sampling
 # Arguments
-- `params::Params` - Simulation parameters
+- `params::CovidPOMDP` - Simulation parameters
 """
-function State(params::Params, rng=Random.GLOBAL_RNG)::State
+function State(params::CovidPOMDP, rng=Random.GLOBAL_RNG)::State
     N = params.N
     S, inf, R = round.(Int,simplex_sample(3, Float64(N), rng))
 

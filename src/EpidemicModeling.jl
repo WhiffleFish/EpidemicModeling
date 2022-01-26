@@ -3,8 +3,7 @@ module EpidemicModeling
 using Random
 using Reexport
 using Distributions
-using Parameters
-using POMDPs, POMDPModelTools
+using POMDPs
 using ParticleFilters
 @reexport using Plots
 import Plots.plot
@@ -13,7 +12,7 @@ import CSV.File
 import DataFrames.DataFrame
 
 include("InfectionSim.jl")
-export initParams, Params, Action, State, Simulate, plotHist
+export CovidPOMDP, Action, State, Simulate
 export initSIR, initSEIR
 
 

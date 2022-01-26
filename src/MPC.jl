@@ -144,7 +144,7 @@ end
 
 function MPC(
     SIR_params::NTuple{3,Float64},
-    params::Params;
+    params::CovidPOMDP;
     callback::Bool=true,
     PredHorizon::Int64 = 20,
     ControlHorizon::Int64 = 3,
@@ -265,7 +265,7 @@ end
 
 function MPC(
     SEIR_params::NTuple{5,Float64},
-    params::Params;
+    params::CovidPOMDP;
     callback::Bool=true,
     PredHorizon::Int64 = 20,
     ControlHorizon::Int64 = 3,
@@ -315,10 +315,10 @@ function OptimalAction(mpc::MPC, state::State)
     return JuMP.value.(model[:T])[1:mpc.ControlHorizon]
 end
 
-OptimalAction(params::Params, mpc::MPC, s::State) = OptimalAction(mpc, s)
-OptimalAction(params::Params, mpc::MPC, pc::ParticleCollection) = OptimalAction(mpc,mean(pc, params))
+OptimalAction(params::CovidPOMDP, mpc::MPC, s::State) = OptimalAction(mpc, s)
+OptimalAction(params::CovidPOMDP, mpc::MPC, pc::ParticleCollection) = OptimalAction(mpc,mean(pc, params))
 
-function Simulate(T::Int, state::State, params::Params, mpc::MPC)
+function Simulate(T::Int, state::State, params::CovidPOMDP, mpc::MPC)
     susHist = zeros(Int,T)
     infHist = zeros(Int,T)
     recHist = zeros(Int,T)
@@ -356,7 +356,7 @@ function Simulate(T::Int, state::State, params::Params, mpc::MPC)
     return sim_hist, actionHist
 end
 
-function Simulate(T::Int, state::State, b0::ParticleCollection, params::Params, mpc::MPC)
+function Simulate(T::Int, state::State, b0::ParticleCollection, params::CovidPOMDP, mpc::MPC)
     upd = BootstrapFilter(unity_test_period(params), n_particles(b0))
     susHist = zeros(Int,T)
     infHist = zeros(Int,T)

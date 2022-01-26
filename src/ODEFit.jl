@@ -36,7 +36,7 @@ end α β γ δ ϵ
 - `T::Int`
 - `p::Union{Array{Float64,1}, Tuple}`
 """
-function SolveODE(kind::Symbol, u0::Array{Float64, 1}, T::Int, p::Union{Array{Float64,1}, Tuple})
+function SolveODE(kind::Symbol, u0::Vector{Float64}, T::Int, p::Union{Vector{Float64}, Tuple})
     if kind == :SIR
         @assert length(u0) == 3 && length(p) == 2
         prob = ODEProblem(SIR_ODE, u0, (1. , Float64(T)), p)
@@ -159,11 +159,18 @@ Fit SIR or SEIR model parameters to an ensemble of stochastic simulations
 - `kind::Symbol` - Type of differential model to fit (`:SIR` or `:SEIR`)
 - `T::Int` - Simulation Time (days)
 - `trajectories::Int64` - Number of random simulations to fit
-- `params::Params` - Simulation Parameters
+- `params::CovidPOMDP` - Simulation Parameters
 - `action::Action` - Simulation Action
 - `show_trace::Bool = false` (opt) - print live optimization status
 """
-function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Params, action::Action; show_trace::Bool=false)
+function FitRandEnsemble(
+        kind::Symbol,
+        T::Int,
+        trajectories::Int64,
+        params::CovidPOMDP,
+        action::Action;
+        show_trace::Bool=false
+    )
 
     sims = SimulateEnsemble(T, trajectories, params, action)
     data_times = 1:T
@@ -173,7 +180,7 @@ function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Para
         first_guess = [0.1,0.1]
         initial_conditions = [initSIR(sim) for sim in sims]
 
-        LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
+        LossCalcParams = (IC=initial_conditions, T=T, ref=ref_data)
 
         result = Optim.optimize(
             x->SIR_param_loss(x,LossCalcParams),
@@ -186,7 +193,7 @@ function FitRandEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Para
         first_guess = [0.1, 0.1, 0.1]
         initial_conditions = [initSEIR(sim) for sim in sims]
 
-        LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
+        LossCalcParams = (IC=initial_conditions, T=T, ref=ref_data)
 
         result = Optim.optimize(
             x->SEIR_param_loss(x,LossCalcParams),
@@ -209,10 +216,16 @@ Fit SIR or SEIR model parameters to an ensemble of stochastic simulations
 - `kind::Symbol` - Type of differential model to fit (`:SIR` or `:SEIR`)
 - `T::Int` - Simulation Time (days)
 - `trajectories::Int64` - Number of random simulations to fit
-- `params::Params` - Simulation Parameters
+- `params::CovidPOMDP` - Simulation Parameters
 - `show_trace::Bool = false` (opt) - print live optimization status
 """
-function FitRandControlledEnsemble(kind::Symbol, T::Int, trajectories::Int64, params::Params; show_trace::Bool=false)
+function FitRandControlledEnsemble(
+        kind::Symbol,
+        T::Int,
+        trajectories::Int64,
+        params::CovidPOMDP;
+        show_trace::Bool=false
+    )
 
     actions = rand(trajectories) .|> Action
 
@@ -222,9 +235,12 @@ function FitRandControlledEnsemble(kind::Symbol, T::Int, trajectories::Int64, pa
 
     if kind == :SIR
         first_guess = [0.1, 0.1, 0.1]
-        initial_conditions = [vcat(initSIR(sim),actions[i].testing_prop) for (i,sim) in enumerate(sims)]
+        initial_conditions = [
+            vcat(initSIR(sim),actions[i].testing_prop)
+            for (i,sim) in enumerate(sims)
+        ]
 
-        LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
+        LossCalcParams = (IC=initial_conditions, T=T, ref=ref_data)
 
         result = Optim.optimize(
             x->SIR_CTRL_param_loss(x, LossCalcParams),
@@ -235,9 +251,12 @@ function FitRandControlledEnsemble(kind::Symbol, T::Int, trajectories::Int64, pa
 
     elseif kind == :SEIR
         first_guess = [0.1, 0.1, 0.1, 1., 1.]
-        initial_conditions = [vcat(initSEIR(sim),actions[i].testing_prop) for (i,sim) in enumerate(sims)]
+        initial_conditions = [
+            vcat(initSEIR(sim), actions[i].testing_prop)
+            for (i,sim) in enumerate(sims)
+        ]
 
-        LossCalcParams = Dict(:IC=>initial_conditions, :T=>T, :ref=>ref_data)
+        LossCalcParams = (IC=initial_conditions, T=T, ref=ref_data)
 
         result = Optim.optimize(
             x->SEIR_CTRL_param_loss(x, LossCalcParams),
@@ -259,7 +278,7 @@ end
 - `p::Vector{Float64}` - Vector of parameters α, β for SIR ODE
 - `LossCalcParams::Dict`
 """
-function SIR_param_loss(p::Vector{Float64}, LossCalcParams::Dict)::Float64
+function SIR_param_loss(p::Vector{Float64}, LossCalcParams::NamedTuple)::Float64
     loss = 0.
     for i in 1:length(LossCalcParams[:IC])
         data = Array(SolveODE(:SIR, LossCalcParams[:IC][i],LossCalcParams[:T], p))
@@ -275,7 +294,7 @@ end
 - `p::Vector{Float64}` - Vector of parameters ``\\alpha, \\beta`` for SIR ODE
 - `LossCalcParams::Dict`
 """
-function SIR_CTRL_param_loss(p::Vector{Float64}, LossCalcParams::Dict)::Float64
+function SIR_CTRL_param_loss(p::Vector{Float64}, LossCalcParams::NamedTuple)::Float64
     loss = 0.
     for i in 1:length(LossCalcParams[:IC])
         data = Array(SolveODE(:SIR_CTRL, LossCalcParams[:IC][i], LossCalcParams[:T], p))
@@ -291,7 +310,7 @@ end
 - `p::Vector{Float64}` - Vector of parameters ``\\alpha, \\beta, \\gamma `` for SEIR ODE
 - `LossCalcParams::Dict`
 """
-function SEIR_param_loss(p::Vector{Float64}, LossCalcParams::Dict)::Float64
+function SEIR_param_loss(p::Vector{Float64}, LossCalcParams::NamedTuple)::Float64
     loss = 0.
     for i in 1:length(LossCalcParams[:IC])
         data = Array(SolveODE(:SEIR,LossCalcParams[:IC][i],LossCalcParams[:T], p))
@@ -308,7 +327,7 @@ end
 - `p::Vector{Float64}` - Vector of parameters ``\\alpha, \\beta, \\gamma `` for SEIR ODE
 - `LossCalcParams::Dict`
 """
-function SEIR_CTRL_param_loss(p::Vector{Float64}, LossCalcParams::Dict)::Float64
+function SEIR_CTRL_param_loss(p::Vector{Float64}, LossCalcParams::NamedTuple)::Float64
     loss = 0.
     for i in 1:length(LossCalcParams[:IC])
         data = Array(SolveODE(:SEIR_CTRL, LossCalcParams[:IC][i], LossCalcParams[:T], p))
