@@ -5,7 +5,7 @@ function POMDPs.gen(pomdp::CovidPOMDP, s::State, a::Action, rng::AbstractRNG=Ran
         s,o,r = pomdp.interface.gen(pomdp, s, a, rng)
         rsum += r
     end
-    return (sp=s,o=o,r=rsum)
+    return (sp=s, o=o, r=rsum)
 end
 
 function POMDPs.observation(pomdp::CovidPOMDP, s::State, a::Action, sp::State)

@@ -102,28 +102,13 @@ struct State
     S::Int # Current Susceptible Population
     I::Vector{Int} # Current Infected Population
     R::Int # Current Recovered Population
-    N::Int # Total Population - move to params
     Tests::Matrix{Int} # Rows: Days from receiving test result; Columns: Infection Age
     prev_action::Action
 end
 
-abstract type SolverInterface end
-
-struct ContinuousSolverInterface{O<:Function,G<:Function} <: SolverInterface
-    actions::Vector{Action}
-    observation::O
-    gen::G
+function population(s::State)
+    return s.S + sum(s.I) + s.R
 end
-
-struct DiscreteSolverInterface{O<:Function,G<:Function} <: SolverInterface
-    actions::Vector{Action}
-    observation::O
-    gen::G
-    c::Float64
-    n_obs::Int
-end
-
-
 
 """
 # Arguments
@@ -135,11 +120,9 @@ end
 - `test_delay::Int = 0` - Delay between test being administered and received by subject (days)
 - `N::Int=1_000_000` - Total Population
 - `discount::Float64=0.95` - POMDP discount factor
-- `interface::SolverInterface` - Used for discrete/continuous observations/gen
 """
-struct CovidPOMDP{D<:Distribution, IF<:SolverInterface} <: POMDP{State, Action, Int64}
+struct CovidPOMDP{D<:Distribution} <: POMDP{State, Action, Int64}
     symptom_dist::D
-    interface::IF
     Infdistributions::Vector{Gamma{Float64}}
     symptomatic_isolation_prob::Float64
     asymptomatic_prob::Float64
@@ -152,8 +135,6 @@ struct CovidPOMDP{D<:Distribution, IF<:SolverInterface} <: POMDP{State, Action, 
     testrate_loss::Float64
     test_period::Int
 end
-
-## Continuous
 
 function reward(m::CovidPOMDP, s::State, a::Action, sp::State)
     inf_loss = m.inf_loss*sum(sp.I)/m.N
@@ -183,64 +164,6 @@ function ContinuousObservation(m::CovidPOMDP, state::State, a::Action)
     end
     return Normal(tot_mean, sqrt(tot_variance))
 end
-
-
-## Discrete
-
-expansion_map(x::Float64, c::Float64=2.0) = log((exp(c)-1)*x + 1)
-contraction_map(x::Float64, c::Float64=2.0) = (exp(x)-1)/(exp(c)-1)
-
-"""
-Returns tuple `(bin_centers, bin_edges)`
-OUTPUT IS EXPANSION MAPPED
-"""
-function get_bins(c::Float64=2.0, n_obs::Int=10)
-    bin_edges = LinRange(0,c,n_obs+1)
-    bin_centers = 0.5*(circshift(bin_edges,1) + bin_edges)[2:end]
-    return bin_centers, bin_edges
-end
-
-function DiscreteGen(m::CovidPOMDP, s::State, a::Action, rng::AbstractRNG)
-    sp, new_inf, o = SimStep(s, m, a)
-    r = reward(m, s, a, sp)
-    o = expansion_map(sum(o)/m.N)
-
-    bin_centers, _ = get_bins(m.interface.c, m.interface.n_obs)
-
-    obs = argmin(abs.(o .- bin_centers))
-    return (sp=sp, o=obs, r=r)
-end
-
-function DiscreteObservation(m::CovidPOMDP, state::State, a::Action)
-    c = m.interface.c
-    n_obs = m.interface.n_obs
-    _, bin_edges = get_bins(c, n_obs)
-
-    bin_edges = round.(Int,contraction_map.(bin_edges).*m.N)
-
-    tot_mean = 0.0
-    tot_variance = 0.0
-    for (i,inf) in enumerate(state.I)
-        num_already_tested = sum(state.Tests[:,i])
-        num_tested = floor(Int,(inf-num_already_tested)*a.testing_prop)
-        dist = Binomial(num_tested,m.pos_test_probs[i])
-        tot_mean += mean(dist)
-        tot_variance += std(dist)^2
-    end
-    continuous_dist = Normal(tot_mean, sqrt(tot_variance))
-    if mean(continuous_dist) ≈ 0.0
-        return SparseCat(collect(1:n_obs), vcat(1.0, zeros(Float64, n_obs-1)))
-    end
-    probs = [
-        cdf(continuous_dist,bin_edges[idx+1])-cdf(continuous_dist,bin_edges[idx])
-        for idx in eachindex(bin_edges[1:end-1])
-    ]
-    probs ./= sum(probs)
-    @assert all(≥(0.), probs)
-    # return SparseCat(observations(m), probs)
-    return SparseCat(collect(1:n_obs), probs)
-end
-
 
 """
 Simulation History
@@ -388,7 +311,7 @@ end
 - `action::Action` - Current Sim Action
 """
 function SimStep(state::State, params::CovidPOMDP, a::Action)
-    (;S, I, R, N, Tests, prev_action) = state
+    (;S, I, R, Tests, prev_action) = state
 
     # Update symptomatic and testing-based isolations
     I, R, Tests, pos_tests = UpdateIsolations(params, I, R, Tests, a)
@@ -399,7 +322,7 @@ function SimStep(state::State, params::CovidPOMDP, a::Action)
     new_infections = IncidentInfections(params, S, I, R)
     I[1] = new_infections
     S -= new_infections
-    sp = State(S, I, R, N, Tests, a)
+    sp = State(S, I, R, Tests, a)
     return sp, new_infections, pos_tests
 end
 
@@ -638,15 +561,8 @@ function CovidPOMDP(;
     pos_test_probs = [prop_above_LOD(viral_loads,day,LOD) for day in 1:horizon]
     symptom_dist = LogNormal(1.644,0.363)
 
-    if n_obs ≤ 0
-        interface = ContinuousSolverInterface(actions, ContinuousObservation, ContinuousGen)
-    else
-        interface = DiscreteSolverInterface(actions, DiscreteObservation, DiscreteGen, c, n_obs)
-    end
-
     return CovidPOMDP(
         symptom_dist,
-        interface,
         infDistributions,
         symptomatic_isolation_prob,
         asymptomatic_prob,
@@ -711,7 +627,7 @@ function State(I, params::CovidPOMDP, rng::AbstractRNG=Random.GLOBAL_RNG)::State
     R0 = 0
     tests = zeros(Int, params.test_delay+1, horizon)
 
-    return State(S0, I0, R0, N, tests, Action(0.0))
+    return State(S0, I0, R0, tests, Action(0.0))
 end
 
 function simplex_sample(N::Int, m::Float64, rng::AbstractRNG=Random.GLOBAL_RNG)
@@ -747,5 +663,5 @@ function State(params::CovidPOMDP, rng=Random.GLOBAL_RNG)::State
 
     tests = zeros(Int, params.test_delay+1, horizon)
 
-    return State(S, I, R, N, tests, Action(0.0))
+    return State(S, I, R, tests, Action(0.0))
 end

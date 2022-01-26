@@ -1,20 +1,3 @@
-# GLPK does not work with '==' constraints
-
-# List of solvers - https://jump.dev/JuMP.jl/v0.21.1/installation/#Installation-Guide-1
-
-#= Desired Structure
-Instantiate MPC
-- Have predefined model
-- Set IC and optimize control in same function! - MPC struct is IMMUTABLE
-
-input State to MPC
-
-Output
-- full::Bool
-    - true: output 2d array [S, I, R, control over PredHorizon]
-    - false: output control vector of length ControlHorizon
-=#
-
 abstract type MPC end
 
 """
@@ -28,7 +11,7 @@ abstract type MPC end
 `IC::Vector{ParameterRef}` - ParameterJuMP parameter initial conditions for MPC: `[S0, I0, R0]`
 """
 struct SIR_MPC <: MPC
-    model::JuMP.Model
+    model::JuMP.Model # TODO: make sure this is type stable
     PredHorizon::Int64
     ControlHorizon::Int64
     InfWeight::Float64
@@ -105,17 +88,20 @@ function MPC(
     # Dynamic Constraints
     JuMP.@constraint(
         model,
-        [i=2:PredHorizon], S[i] == S[i-1] - β*I[i-1]*S[i-1]
+        [i=2:PredHorizon],
+        S[i] == S[i-1] - β*I[i-1]*S[i-1]
     )
 
     JuMP.@constraint(
         model,
-        [i=2:PredHorizon], I[i] == I[i-1] + β*I[i-1]*S[i-1] - (α+δ*T[a_ind(i-1)])*I[i-1]
+        [i=2:PredHorizon],
+        I[i] == I[i-1] + β*I[i-1]*S[i-1] - (α+δ*T[a_ind(i-1)])*I[i-1]
     )
 
     JuMP.@constraint(
         model,
-        [i=2:PredHorizon], R[i] == R[i-1] + (α+δ*T[a_ind(i-1)])*I[i-1]
+        [i=2:PredHorizon],
+        R[i] == R[i-1] + (α+δ*T[a_ind(i-1)])*I[i-1]
     )
 
     a0 = @variable(model, a0)
@@ -139,7 +125,15 @@ function MPC(
     JuMP.@constraint(model, I[1] == I0)
     JuMP.@constraint(model, R[1] == R0)
 
-    return SIR_MPC(model, PredHorizon, ControlHorizon, InfWeight, TestRateWeight, TestRateWeight, [S0,I0,R0])
+    return SIR_MPC(
+        model,
+        PredHorizon,
+        ControlHorizon,
+        InfWeight,
+        TestRateWeight,
+        TestRateWeight,
+        [S0,I0,R0]
+    )
 end
 
 function MPC(
@@ -260,7 +254,16 @@ function MPC(
     JuMP.@constraint(model, I[1] == I0)
     JuMP.@constraint(model, R[1] == R0)
 
-    return SEIR_MPC(model, PredHorizon, ControlHorizon, InfWeight, ExpWeight, TestRateWeight, TestRateWeight, [S0,E0,I0,R0])
+    return SEIR_MPC(
+        model,
+        PredHorizon,
+        ControlHorizon,
+        InfWeight,
+        ExpWeight,
+        TestRateWeight,
+        TestRateWeight,
+        [S0,E0,I0,R0]
+    )
 end
 
 function MPC(
@@ -286,25 +289,26 @@ function MPC(
 end
 
 function SetIC!(mpc::MPC, state::State)
+    N = population(state)
     if mpc isa SIR_MPC
         S0,I0,R0 = mpc.IC
-        set_value(S0, state.S/state.N)
-        set_value(I0, sum(state.I)/state.N)
-        set_value(R0, state.R/state.N)
+        set_value(S0, state.S/N)
+        set_value(I0, sum(state.I)/N)
+        set_value(R0, state.R/N)
         # fix(a0, state.prev_action.testing_prop)
         fix(mpc.model[:a0_const], state.prev_actions.testing_prop)
     else
         S0,E0,I0,R0 = mpc.IC
-        set_value(S0, state.S/state.N)
+        set_value(S0, state.S/N)
         set_value(E0, 0.)
-        set_value(I0, sum(state.I)/state.N)
-        set_value(R0, state.R/state.N)
+        set_value(I0, sum(state.I)/N)
+        set_value(R0, state.R/N)
         fix(mpc.model[:a0_const], state.prev_action.testing_prop)
     end
 
 end
 
-function OptimalAction(mpc::MPC, state::State)
+function POMDPs.action(mpc::MPC, state::State)
 
     SetIC!(mpc, state)
 
@@ -315,8 +319,7 @@ function OptimalAction(mpc::MPC, state::State)
     return JuMP.value.(model[:T])[1:mpc.ControlHorizon]
 end
 
-OptimalAction(params::CovidPOMDP, mpc::MPC, s::State) = OptimalAction(mpc, s)
-OptimalAction(params::CovidPOMDP, mpc::MPC, pc::ParticleCollection) = OptimalAction(mpc,mean(pc, params))
+POMDPs.action(mpc::MPC, pc::ParticleCollection) = action(mpc, mean(pc))
 
 function Simulate(T::Int, state::State, params::CovidPOMDP, mpc::MPC)
     susHist = zeros(Int,T)
