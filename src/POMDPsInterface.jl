@@ -1,18 +1,28 @@
 function POMDPs.gen(pomdp::CovidPOMDP, s::State, a::Action, rng::AbstractRNG=Random.GLOBAL_RNG)
     rsum = 0.0
-    o = nothing
+    local o::obstype(pomdp)
     for i in 1:pomdp.test_period
-        s,o,r = pomdp.interface.gen(pomdp, s, a, rng)
+        s,o,r = continuous_gen(pomdp, s, a, rng)
         rsum += r
     end
     return (sp=s, o=o, r=rsum)
 end
 
 function POMDPs.observation(pomdp::CovidPOMDP, s::State, a::Action, sp::State)
-    pomdp.interface.observation(pomdp, s, a)
+    tot_mean = 0.0
+    tot_variance = 0.0
+
+    for (i,inf) in enumerate(state.I)
+        num_already_tested = sum(@view s.Tests[:,i])
+        num_tested = floor(Int,(inf-num_already_tested)*a.testing_prop)
+        dist = Binomial(num_tested,pomdp.pos_test_probs[i])
+        tot_mean += mean(dist)
+        tot_variance += std(dist)^2
+    end
+    return Normal(tot_mean, sqrt(tot_variance))
 end
 
-POMDPs.actions(pomdp::CovidPOMDP) = pomdp.interface.actions
+POMDPs.actions(pomdp::CovidPOMDP) = pomdp.actions
 
 POMDPs.discount(pomdp::CovidPOMDP) = pomdp.discount
 

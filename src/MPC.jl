@@ -336,7 +336,7 @@ function Simulate(T::Int, state::State, params::CovidPOMDP, mpc::MPC)
     @showprogress for day in 1:T
 
         if (day-1)%params.test_period == 0
-            action = Action(first(OptimalAction(params, mpc, state)))
+            action = Action(first(POMDPs.action(mpc, state)))
         else
             action = actionHist[day-1]
         end
@@ -405,7 +405,7 @@ end
 # ---------------------------------------------------------------------------- #
 
 
-function plot(mpc::MPC, var::Symbol)
+function Plots.plot(mpc::MPC, var::Symbol)
     yLabelDict = Dict(
         :S=>"Susceptible Proportion", :E=>"Exposed Proportion",
         :I=>"Infected Proportion", :R=>"Recovered Proportion", :T=>"Testing Strength"
@@ -419,7 +419,7 @@ function plot(mpc::MPC, var::Symbol)
     ylabel!(yLabelDict[var])
 end
 
-function plot!(mpc::MPC, var::Symbol)
+function Plots.plot!(mpc::MPC, var::Symbol)
     yLabelDict = Dict(
         :S=>"Susceptible Proportion", :E=>"Exposed Proportion",
         :I=>"Infected Proportion", :R=>"Recovered Proportion", :T=>"Testing Strength"

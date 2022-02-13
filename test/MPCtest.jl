@@ -14,7 +14,7 @@ SEIRmpc = MPC(
     ControlHorizon = 1,
     TestWeight = 2.0,
     TestRateWeight = 50.0,
-    PredHorizon=30
+    PredHorizon = 30
 )
 
 T = 150
